@@ -80,6 +80,7 @@ async function fetchPoolConfig(poolAddress) {
     tokenYSymbol:    d.token_y?.symbol,
     tokenXPrice:     d.token_x?.price ?? 0,
     tokenYPrice:     d.token_y?.price ?? 0,
+    currentPrice:    d.current_price ?? 0,  // datapi scale — matches OHLCV candle prices
   };
 }
 
@@ -169,27 +170,14 @@ function processCandle(candle, position) {
   }
 
   // ── IL ──
-  // Recompute current token value vs hodl value using close price
-  const p  = Math.max(lowerPrice, Math.min(upperPrice, close));
-  const pa = lowerPrice;
-  const pb = upperPrice;
-
-  const sqrtP  = Math.sqrt(p);
-  const sqrtPa = Math.sqrt(pa);
-  const sqrtPb = Math.sqrt(pb);
-  const yFracNow = (sqrtP - sqrtPa) / (sqrtPb - sqrtPa);
-  const xFracNow = 1 - yFracNow;
-
-  // Current token amounts (in USD at current price)
-  const currentXUsd  = depositAmount * xFracNow;
-  const currentYUsd  = depositAmount * yFracNow;
-
-  // Scale initial holdings to current price
-  const xTokens      = initialXUsd / entryPrice;   // how many base tokens we hold
-  const hodlValueUsd = xTokens * close + initialYUsd;
-  const currentValue = currentXUsd + currentYUsd;
-
-  const ilUsd = currentValue - hodlValueUsd;
+  // Use price ratio formula: IL% = 2*sqrt(r)/(1+r) - 1 where r = currentPrice/entryPrice
+  // Clamp current price to range (when OOR, IL is locked at the boundary price ratio)
+  const effectivePrice = Math.max(lowerPrice, Math.min(upperPrice, close));
+  const r = entryPrice > 0 ? effectivePrice / entryPrice : 1;
+  const ilPct = r > 0 ? (2 * Math.sqrt(r)) / (1 + r) - 1 : 0;
+  // Amplify for concentrated liquidity: IL is higher in a narrow range
+  const rangeWidth = upperPrice > lowerPrice ? Math.sqrt(upperPrice / lowerPrice) : 1;
+  const ilUsd = depositAmount * ilPct * rangeWidth;
 
   return { feeEarned, ilUsd, currentPrice: close, inRange: overlapHigh > overlapLow };
 }
@@ -209,21 +197,30 @@ export async function openPaperPosition({
   const { getBinIdFromPrice } = await getDLMMHelpers();
   const poolCfg = await fetchPoolConfig(pool_address);
 
-  const { binStep, baseFeePct, protocolFeePct, tvl, name, tokenXSymbol, tokenYSymbol, tokenXPrice } = poolCfg;
+  const { binStep, baseFeePct, protocolFeePct, tvl, name, tokenXSymbol, tokenYSymbol, currentPrice } = poolCfg;
   const lpFeeFraction = (baseFeePct / 100) * (1 - protocolFeePct / 100);
 
   const lowerBinId  = getBinIdFromPrice(lower_price, binStep, true);
   const upperBinId  = getBinIdFromPrice(upper_price, binStep, false);
-  const activeBinId = getBinIdFromPrice(tokenXPrice || (lower_price + upper_price) / 2, binStep, true);
+  const activeBinId = getBinIdFromPrice((lower_price + upper_price) / 2, binStep, true);
 
   if (lowerBinId >= upperBinId) throw new Error("lower_price must be less than upper_price");
 
-  const numBins          = upperBinId - lowerBinId + 1;
-  const avgExistingBinTvl = tvl > 0 ? tvl / numBins : deposit_amount; // fallback if TVL unknown
-  const weights          = buildWeights(strategy_type, lowerBinId, upperBinId, activeBinId);
+  // SDK bin prices and OHLCV candle prices may differ in scale due to token decimal differences.
+  // Detect scale factor by comparing SDK midpoint to datapi current_price (which matches OHLCV scale).
+  const sdkMidPrice = (lower_price + upper_price) / 2;
+  const priceScale  = currentPrice > 0 && sdkMidPrice > 0 ? currentPrice / sdkMidPrice : 1;
 
-  const entryPrice  = tokenXPrice || (lower_price + upper_price) / 2;
-  const { xUsd, yUsd } = computeInitialSplit(deposit_amount, entryPrice, lower_price, upper_price);
+  // Normalized prices — consistent with OHLCV candle close/high/low values
+  const normLowerPrice = lower_price * priceScale;
+  const normUpperPrice = upper_price * priceScale;
+  const normEntryPrice = sdkMidPrice * priceScale; // ≈ currentPrice
+
+  const numBins           = upperBinId - lowerBinId + 1;
+  const avgExistingBinTvl = tvl > 0 ? tvl / numBins : deposit_amount;
+  const weights           = buildWeights(strategy_type, lowerBinId, upperBinId, activeBinId);
+
+  const { xUsd, yUsd } = computeInitialSplit(deposit_amount, normEntryPrice, normLowerPrice, normUpperPrice);
 
   const nowSec = Math.floor(Date.now() / 1000);
   const id     = `paper-${Date.now().toString(36)}`;
@@ -244,8 +241,11 @@ export async function openPaperPosition({
     weights,
     avg_existing_bin_tvl: avgExistingBinTvl,
 
-    // entry state
-    entry_price:       entryPrice,
+    // entry state (prices in OHLCV/datapi scale)
+    entry_price:       normEntryPrice,
+    lower_price:       normLowerPrice,
+    upper_price:       normUpperPrice,
+    price_scale:       priceScale,
     entry_timestamp:   nowSec,
     opened_at:         new Date().toISOString(),
     initial_x_usd:     xUsd,
@@ -257,7 +257,7 @@ export async function openPaperPosition({
     net_pnl:           0,
     candles_total:     0,
     candles_in_range:  0,
-    last_price:        entryPrice,
+    last_price:        normEntryPrice,
     last_candle_timestamp: nowSec,
     status:            "open",
     closed_at:         null,
@@ -385,7 +385,7 @@ function formatSummary(pos) {
     status:        pos.status,
     strategy:      pos.strategy_type,
     deposit:       pos.deposit_amount,
-    range:         { lower: pos.lower_price, upper: pos.upper_price },
+    range:         { lower: pos.lower_price, upper: pos.upper_price, scale: pos.price_scale ?? 1 },
     entry_price:   pos.entry_price,
     last_price:    pos.last_price,
     opened_at:     pos.opened_at,
