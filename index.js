@@ -6,7 +6,8 @@ import { fileURLToPath } from "url";
 import { agentLoop } from "./agent.js";
 import { log } from "./logger.js";
 import { getMyPositions, closePosition, getActiveBin } from "./tools/dlmm.js";
-import { getWalletBalances } from "./tools/wallet.js";
+import { formatClosedPosition, formatClosedPositionsList } from "./tools/format.js";
+import { getWalletBalances, getSolPrice } from "./tools/wallet.js";
 import { getTopCandidates } from "./tools/screening.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
@@ -28,8 +29,9 @@ import { generateBriefing } from "./briefing.js";
 import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, getTrackedPositions, setPositionInstruction, updatePnlAndCheckExits, queuePeakConfirmation, resolvePendingPeak, queueTrailingDropConfirmation, resolvePendingTrailingDrop } from "./state.js";
 import { getActiveStrategy } from "./strategy-library.js";
 import { recordPositionSnapshot, recallForPool, addPoolNote } from "./pool-memory.js";
-import { checkSmartWalletsOnPool } from "./smart-wallets.js";
+import { checkSmartWalletsOnPool, addSmartWallet, listSmartWallets, evaluateLPerFromMeteora } from "./smart-wallets.js";
 import { getTokenNarrative, getTokenInfo } from "./tools/token.js";
+import { studyTopLPers } from "./tools/study.js";
 import { stageSignals } from "./signal-tracker.js";
 import { getWeightsSummary } from "./signal-weights.js";
 import { bootstrapHiveMind, ensureAgentId, getHiveMindPullMode, isHiveMindEnabled, pullHiveMindLessons, pullHiveMindPresets, registerHiveMindAgent, startHiveMindBackgroundSync } from "./hivemind.js";
@@ -93,6 +95,8 @@ let _managementBusy = false; // prevents overlapping management cycles
 let _screeningBusy = false;  // prevents overlapping screening cycles
 let _screeningLastTriggered = 0; // epoch ms — prevents management from spamming screening
 let _pollTriggeredAt = 0; // epoch ms — cooldown for poller-triggered management
+let _lastDeployArgs = null; // captured deploy_position args, used by autoGrowSmartWalletsFromStudy
+let _smartWalletAddsToday = { date: "", count: 0 }; // daily cap counter (resets midnight UTC)
 const _peakConfirmTimers = new Map();
 const _trailingDropConfirmTimers = new Map();
 const TRAILING_PEAK_CONFIRM_DELAY_MS = 15_000;
@@ -453,16 +457,18 @@ export async function runScreeningCycle({ silent = false } = {}) {
     const allCandidates = [];
     for (const pool of candidates) {
       const mint = pool.base?.mint;
-      const [smartWallets, narrative, tokenInfo] = await Promise.allSettled([
+      const [smartWallets, narrative, tokenInfo, study] = await Promise.allSettled([
         checkSmartWalletsOnPool({ pool_address: pool.pool }),
         mint ? getTokenNarrative({ mint }) : Promise.resolve(null),
         mint ? getTokenInfo({ query: mint }) : Promise.resolve(null),
+        studyTopLPers({ pool_address: pool.pool, limit: 4 }),
       ]);
       allCandidates.push({
         pool,
         sw: smartWallets.status === "fulfilled" ? smartWallets.value : null,
         n: narrative.status === "fulfilled" ? narrative.value : null,
         ti: tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null,
+        study: study.status === "fulfilled" ? study.value : null,
         mem: recallForPool(pool.pool),
       });
       await new Promise(r => setTimeout(r, 150)); // avoid 429s
@@ -546,7 +552,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
     );
 
     // Build compact candidate blocks
-    const candidateBlocks = passing.map(({ pool, sw, n, ti, mem }, i) => {
+    const candidateBlocks = passing.map(({ pool, sw, n, ti, mem, study }, i) => {
       const botPct = ti?.audit?.bot_holders_pct ?? "?";
       const top10Pct = ti?.audit?.top_holders_pct ?? "?";
       const feesSol = ti?.global_fees_sol ?? "?";
@@ -559,12 +565,17 @@ export async function runScreeningCycle({ silent = false } = {}) {
         ? `  pvp: HIGH — rival ${pool.pvp_rival_name || pool.pvp_symbol} (${pool.pvp_rival_mint?.slice(0, 8)}...) has pool ${pool.pvp_rival_pool?.slice(0, 8)}..., tvl=$${pool.pvp_rival_tvl}, holders=${pool.pvp_rival_holders}, fees=${pool.pvp_rival_fees}SOL`
         : null;
 
+      const studyLine = study?.patterns?.top_lper_count
+        ? `  top_lpers: ${study.patterns.top_lper_count} active, avg_pnl=${study.patterns.avg_open_pnl_pct}%, style=${study.patterns.suggested_style?.strategy || "?"}/${study.patterns.suggested_style?.rangeStyle || "?"}, best=${study.patterns.best_open_pnl_pct || "?"}`
+        : null;
+
       const block = [
         `POOL: ${pool.name} (${pool.pool})`,
         `  metrics: bin_step=${pool.bin_step}, fee_pct=${pool.fee_pct}%, fee_tvl=${pool.fee_active_tvl_ratio}, vol=$${pool.volume_window}, tvl=$${pool.tvl ?? pool.active_tvl}, volatility_${pool.volatility_timeframe || "30m"}=${pool.volatility}, mcap=$${pool.mcap}, organic=${pool.organic_score}${pool.token_age_hours != null ? `, age=${pool.token_age_hours}h` : ""}`,
         `  audit: top10=${top10Pct}%, bots=${botPct}%, fees=${feesSol}SOL${launchpad ? `, launchpad=${launchpad}` : ""}`,
         pvpLine,
         `  smart_wallets: ${sw?.in_pool?.length ?? 0} present${sw?.in_pool?.length ? ` → CONFIDENCE BOOST (${sw.in_pool.map(w => w.name).join(", ")})` : ""}`,
+        studyLine,
         activeBin != null ? `  active_bin: ${activeBin}` : null,
         priceChange != null ? `  1h: price${priceChange >= 0 ? "+" : ""}${priceChange}%, net_buyers=${netBuyers ?? "?"}` : null,
         n?.narrative ? `  narrative_untrusted: ${sanitizeUntrustedPromptText(n.narrative, 500)}` : `  narrative_untrusted: none`,
@@ -660,14 +671,25 @@ STEPS:
 IMPORTANT:
 - Keep the whole report compact and highly scannable for Telegram.
       `, config.llm.maxSteps, [], "SCREENER", config.llm.screeningModel, 2048, {
-        onToolStart: async ({ name }) => {
-          if (name === "deploy_position") deployAttempted = true;
+        onToolStart: async ({ name, args }) => {
+          if (name === "deploy_position") {
+            deployAttempted = true;
+            _lastDeployArgs = args || {};
+          }
           await liveMessage?.toolStart(name);
         },
-        onToolFinish: async ({ name, result, success }) => {
+        onToolFinish: async ({ name, args, result, success }) => {
           if (name === "deploy_position") {
             deployAttempted = true;
             deploySucceeded = Boolean(success && result?.success !== false && !result?.error && !result?.blocked);
+            // Auto-add smart wallets from study (quality-gated, daily-capped)
+            if (deploySucceeded && args?.pool_address) {
+              try {
+                await autoGrowSmartWalletsFromStudy(args.pool_address);
+              } catch (e) {
+                log("screening", `smart-wallet auto-grow skipped: ${e.message}`);
+              }
+            }
           }
           await liveMessage?.toolFinish(name, result, success);
         },
@@ -1469,9 +1491,22 @@ async function telegramHandler(msg) {
       await sendMessage(`Closing ${pos.pair}...`);
       const result = await closePosition({ position_address: pos.position });
       if (result.success) {
-        const closeTxs = result.close_txs?.length ? result.close_txs : result.txs;
-        const claimNote = result.claim_txs?.length ? `\nClaim txs: ${result.claim_txs.join(", ")}` : "";
-        await sendMessage(`✅ Closed ${pos.pair}\nPnL: ${config.management.solMode ? "◎" : "$"}${result.pnl_usd ?? "?"} | close txs: ${closeTxs?.join(", ") || "n/a"}${claimNote}`);
+        const tracked = getTrackedPosition(pos.position) || {};
+        // Pull live SOL price for the meta line (lightweight, no wallet needed)
+        let solPriceUsd = 0;
+        try { solPriceUsd = await getSolPrice(); } catch {}
+        const block = formatClosedPosition({
+          pos,
+          result,
+          tracked,
+          market: { sol_price_usd: solPriceUsd },
+          config,
+        });
+        await sendMessage(block);
+        if (result.request_id || result.relay) {
+          // preserve old relay trace for ops
+          log("close", `Relay close ${result.request_id || ""} txs=${result.close_txs?.join(",")}`);
+        }
       } else {
         await sendMessage(`❌ Close failed: ${JSON.stringify(result)}`);
       }
@@ -1484,16 +1519,28 @@ async function telegramHandler(msg) {
       const { positions } = await getMyPositions({ force: true });
       if (!positions.length) { await sendMessage("No open positions."); return; }
       await sendMessage(`Closing ${positions.length} position(s)...`);
-      const results = [];
+      // Pull SOL price once for the whole batch
+      let solPriceUsd = 0;
+      try { solPriceUsd = await getSolPrice(); } catch {}
+      const blocks = [];
       for (const pos of positions) {
         try {
           const result = await closePosition({ position_address: pos.position });
-          results.push(`${pos.pair}: ${result.success ? "closed" : `failed (${result.error || "unknown"})`}`);
+          if (result.success) {
+            const tracked = getTrackedPosition(pos.position) || {};
+            blocks.push(formatClosedPosition({
+              pos, result, tracked,
+              market: { sol_price_usd: solPriceUsd },
+              config,
+            }));
+          } else {
+            blocks.push(`❌ ${pos.pair}: ${result.error || "unknown"}`);
+          }
         } catch (error) {
-          results.push(`${pos.pair}: failed (${error.message})`);
+          blocks.push(`❌ ${pos.pair}: ${error.message}`);
         }
       }
-      await sendMessage(`Close-all finished.\n\n${results.join("\n")}`).catch(() => {});
+      await sendMessage(`Close-all finished.\n\n${blocks.join("\n\n")}`).catch(() => {});
     } catch (e) {
       await sendMessage(`Error: ${e.message}`).catch(() => {});
     }
@@ -1651,6 +1698,152 @@ async function telegramHandler(msg) {
 function fmtPct(value) {
   const n = Number(value);
   return Number.isFinite(n) ? `${n.toFixed(2)}%` : "?";
+}
+
+// Quality-gate thresholds for auto-add smart-wallet from study_top_lpers.
+// User-defined hybrid (A+B) criteria: wallets get added only when ALL three
+// of the following hold:
+//   - Total closed positions ≥ 100      (prolific trader, not one-off)
+//   - Last active within 24 hours       (still active, not stale)
+//   - Win rate > 60%                    (proven profitable)
+// Plus a daily cap of 5 new wallets per UTC day to prevent runaway growth.
+// See companion file §Auto-Grow Smart-Wallet from Study (2026-06-22).
+const SMART_WALLET_AUTOADD_MIN_CLOSED = 100;
+const SMART_WALLET_AUTOADD_MAX_AGE_HOURS = 24;
+const SMART_WALLET_AUTOADD_MIN_WIN_RATE = 0.60;
+const SMART_WALLET_AUTOADD_DAILY_CAP = 5;
+
+/**
+ * Pull a fresh study_top_lpers for the deployed pool, then for each candidate
+ * LPer call evaluateLPerFromMeteora() (Meteora /portfolio closed-positions
+ * endpoint) to verify the hybrid (A+B) criteria, and addSmartWallet for those
+ * that pass. Logs the outcome via appendDecision. No-op if data unavailable,
+ * LPers list empty, or daily cap hit.
+ *
+ * Data sources:
+ *   - study_top_lpers (Agent Meridian) — get the LIST of candidate LPers.
+ *   - evaluateLPerFromMeteora (Meteora /portfolio) — authoritative per-wallet
+ *     closed-position count, last-active timestamp, and win rate. This is
+ *     the SOURCE OF TRUTH for the criteria (closed ≥100, age ≤24h, win >60%).
+ */
+async function autoGrowSmartWalletsFromStudy(poolAddress) {
+  if (!poolAddress) return { added: 0, skipped: "no_pool_address" };
+
+  // Daily cap reset
+  const today = new Date().toISOString().slice(0, 10);
+  if (_smartWalletAddsToday.date !== today) {
+    _smartWalletAddsToday = { date: today, count: 0 };
+  }
+  if (_smartWalletAddsToday.count >= SMART_WALLET_AUTOADD_DAILY_CAP) {
+    appendDecision({
+      type: "smart_wallet_autoadd",
+      summary: `daily cap reached (${_smartWalletAddsToday.count}/${SMART_WALLET_AUTOADD_DAILY_CAP})`,
+      pool: poolAddress,
+    });
+    return { added: 0, skipped: "daily_cap" };
+  }
+
+  // Step 1: Get candidate LPers from study_top_lpers
+  const study = await studyTopLPers({ pool_address: poolAddress, limit: 10 });
+  if (!study?.lpers?.length) {
+    return { added: 0, skipped: "no_lpers" };
+  }
+
+  // Existing tracked wallet set (for dedupe)
+  const existing = listSmartWallets();
+  const tracked = new Set((existing?.wallets || []).map((w) => w.address));
+
+  const added = [];
+  const evaluated = [];
+  const skipped = [];
+  for (const lp of study.lpers) {
+    const addr = lp.owner;
+    evaluated.push(addr);
+    if (tracked.has(addr)) {
+      skipped.push({ address: addr, reason: "already_tracked" });
+      continue;
+    }
+
+    // Step 2: Authoritative eval from Meteora /portfolio
+    let stats;
+    try {
+      stats = await evaluateLPerFromMeteora(addr, { daysBack: 365 });
+    } catch (e) {
+      skipped.push({ address: addr, reason: `eval_error: ${e.message}` });
+      continue;
+    }
+    if (stats?.error) {
+      skipped.push({ address: addr, reason: `eval_${stats.error}` });
+      continue;
+    }
+
+    const totalClosed = Number(stats.totalClosedPositions || 0);
+    const lastActiveHoursAgo = Number.isFinite(stats.lastActiveHoursAgo)
+      ? stats.lastActiveHoursAgo
+      : Number.POSITIVE_INFINITY;
+    const winRate = Number(stats.winRate || 0);
+
+    // Criteria check (user-defined 2026-06-22):
+    //   totalClosed ≥ 100  AND  lastActiveHoursAgo ≤ 24  AND  winRate > 0.60
+    const passesCriteria =
+      totalClosed >= SMART_WALLET_AUTOADD_MIN_CLOSED &&
+      lastActiveHoursAgo <= SMART_WALLET_AUTOADD_MAX_AGE_HOURS &&
+      winRate > SMART_WALLET_AUTOADD_MIN_WIN_RATE;
+
+    if (!passesCriteria) {
+      skipped.push({
+        address: addr,
+        reason: "criteria_fail",
+        totalClosed,
+        lastActiveHoursAgo: Math.round(lastActiveHoursAgo * 10) / 10,
+        winRate: Math.round(winRate * 1000) / 1000,
+      });
+      continue;
+    }
+
+    const result = addSmartWallet({
+      name: `top_lper_${lp.owner_short || addr.slice(0, 8)}`,
+      address: addr,
+      category: "alpha",
+      type: "lp",
+    });
+    if (result?.success !== false) {
+      added.push({
+        address: addr,
+        totalClosed,
+        lastActiveHoursAgo: Math.round(lastActiveHoursAgo * 10) / 10,
+        winRate: Math.round(winRate * 1000) / 1000,
+        pnlUsd: stats.totalPnlUsd,
+      });
+      tracked.add(addr);
+      _smartWalletAddsToday.count += 1;
+      if (_smartWalletAddsToday.count >= SMART_WALLET_AUTOADD_DAILY_CAP) break;
+    } else {
+      skipped.push({ address: addr, reason: `addSmartWallet_failed: ${result?.error}` });
+    }
+  }
+
+  appendDecision({
+    type: "smart_wallet_autoadd",
+    summary: `added ${added.length} wallet(s) from study of ${poolAddress} (${evaluated.length} LPers evaluated)`,
+    pool: poolAddress,
+    details: {
+      added,
+      evaluated_count: evaluated.length,
+      skipped_count: skipped.length,
+      skipped_summary: skipped.slice(0, 5), // first 5 to keep log small
+      criteria: {
+        min_closed: SMART_WALLET_AUTOADD_MIN_CLOSED,
+        max_age_hours: SMART_WALLET_AUTOADD_MAX_AGE_HOURS,
+        min_win_rate: SMART_WALLET_AUTOADD_MIN_WIN_RATE,
+        daily_cap: SMART_WALLET_AUTOADD_DAILY_CAP,
+      },
+      data_source: "meteora_datapi_portfolio",
+    },
+  });
+
+  log("screening", `autoGrowSmartWallets: +${added.length}/${evaluated.length} from ${poolAddress}`);
+  return { added: added.length, total: evaluated.length, skipped: skipped.length };
 }
 
 function getLoneCandidateSkipReason({ pool, sw, n, ti } = {}) {

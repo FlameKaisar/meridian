@@ -127,6 +127,25 @@ export async function getWalletBalances() {
  */
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 
+/**
+ * Lightweight SOL price fetch via Jupiter Price API v3.
+ * Returns USD price as a number, or 0 on failure.
+ * Safe to call in parallel (no wallet/auth required).
+ */
+export async function getSolPrice() {
+  try {
+    const res = await fetch(`https://api.jup.ag/price/v3?ids=${SOL_MINT}`);
+    if (!res.ok) return 0;
+    const data = await res.json();
+    const entry = data[SOL_MINT] || data[Object.keys(data)[0]];
+    const price = entry?.usdPrice ?? entry?.price ?? 0;
+    return Math.round(+price * 100) / 100;
+  } catch (err) {
+    log("warn", `getSolPrice failed: ${err.message}`);
+    return 0;
+  }
+}
+
 // Normalize any SOL-like address to the correct wrapped SOL mint
 export function normalizeMint(mint) {
   if (!mint) return mint;

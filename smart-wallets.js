@@ -99,3 +99,93 @@ export async function checkSmartWalletsOnPool({ pool_address }) {
       : `0/${wallets.length} smart wallets in this pool — neutral, rely on fundamentals`,
   };
 }
+
+// ─── Meteora /portfolio closed-positions evaluator ──────────────
+// (added 2026-06-22 — data source for smart-wallet auto-grow)
+//
+// Fetches per-wallet closed DLMM positions across ALL pools from Meteora's
+// public /portfolio endpoint. Returns aggregated metrics that satisfy the
+// user-defined hybrid (A+B) criteria:
+//   - totalClosedPositions: totalPositions (sum across all pages)
+//   - lastActiveAt:         max(pools[].lastClosedAt) timestamp
+//   - winRate:              count(pools[].pnlPctChange > 0) / pools.length
+//   - pnlUsd:               sum(pools[].pnlUsd)
+//   - poolCount:            pools.length
+//
+// Endpoint docs: https://docs.meteora.ag/api-reference/dlmm/portfolio/
+//                get-user-portfolio-with-all-pools-containing-closed-positions
+const METEORA_PORTFOLIO = "https://dlmm.datapi.meteora.ag/portfolio";
+const EVAL_CACHE_TTL = 30 * 60 * 1000; // 30 min — same as study_top_lpers
+const _evalCache = new Map(); // address -> { stats, fetchedAt }
+
+function safeParseNum(value) {
+  const n = parseFloat(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+export async function evaluateLPerFromMeteora(walletAddress, { daysBack = 120, pageSize = 50 } = {}) {
+  // Return cached result if fresh
+  const cached = _evalCache.get(walletAddress);
+  if (cached && Date.now() - cached.fetchedAt < EVAL_CACHE_TTL) {
+    return cached.stats;
+  }
+
+  let totalClosedPositions = 0;
+  let lastActiveAt = 0;
+  let winningPools = 0;
+  let totalPnlUsd = 0;
+  let poolCount = 0;
+  let page = 1;
+  let hasNext = true;
+  const poolsSeen = new Set(); // dedupe by poolAddress
+
+  while (hasNext) {
+    const url = `${METEORA_PORTFOLIO}?user=${walletAddress}&page=${page}&page_size=${pageSize}&days_back=${daysBack}`;
+    let res;
+    try {
+      res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    } catch (e) {
+      log("smart_wallets", `evaluateLPer: fetch error page ${page} for ${walletAddress.slice(0, 8)}: ${e.message}`);
+      return { error: `fetch_error: ${e.message}` };
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      log("smart_wallets", `evaluateLPer: HTTP ${res.status} page ${page} for ${walletAddress.slice(0, 8)}: ${body.slice(0, 120)}`);
+      return { error: `http_${res.status}` };
+    }
+    const data = await res.json();
+    const pools = Array.isArray(data.pools) ? data.pools : [];
+    for (const pool of pools) {
+      if (poolsSeen.has(pool.poolAddress)) continue;
+      poolsSeen.add(pool.poolAddress);
+      poolCount++;
+      totalPnlUsd += safeParseNum(pool.pnlUsd);
+      if (safeParseNum(pool.pnlPctChange) > 0) winningPools++;
+      const closedAt = Number(pool.lastClosedAt || 0);
+      if (closedAt > lastActiveAt) lastActiveAt = closedAt;
+    }
+    // totalPositions is the wallet's all-time closed position count (per page response)
+    // Only trust it on page 1 to avoid double-counting
+    if (page === 1) {
+      totalClosedPositions = Number(data.totalPositions || 0);
+    }
+    hasNext = Boolean(data.hasNext) && page < 20; // safety cap
+    page++;
+  }
+
+  const winRate = poolCount > 0 ? winningPools / poolCount : 0;
+  const stats = {
+    totalClosedPositions,
+    lastActiveAt,
+    lastActiveHoursAgo: lastActiveAt ? (Date.now() / 1000 - lastActiveAt) / 3600 : null,
+    winRate,
+    winningPools,
+    poolCount,
+    totalPnlUsd: Math.round(totalPnlUsd * 100) / 100,
+    pnlUsd: totalPnlUsd, // alias for clarity
+    source: "meteora_datapi_portfolio",
+    fetchedAt: Date.now(),
+  };
+  _evalCache.set(walletAddress, { stats, fetchedAt: Date.now() });
+  return stats;
+}
