@@ -40,7 +40,10 @@ const TIMEFRAME_MINUTES = {
   "24h": 1440,
 };
 import { log, logAction } from "../logger.js";
-import { notifyDeploy, notifyClose, notifySwap } from "../telegram.js";
+import { notifyDeploy, notifyClose, notifySwap, sendMessage } from "../telegram.js";
+import { formatClosedPosition } from "./format.js";
+import { getSolPrice } from "./wallet.js";
+import { getTrackedPosition } from "../state.js";
 
 function numberOrNull(value) {
   const n = Number(value);
@@ -680,7 +683,36 @@ export async function executeTool(name, args) {
       } else if (name === "deploy_position") {
         notifyDeploy({ pair: result.pool_name || args.pool_name || args.pool_address?.slice(0, 8), amountSol: args.amount_y ?? args.amount_sol ?? 0, position: result.position, tx: result.txs?.[0] ?? result.tx, priceRange: result.price_range, rangeCoverage: result.range_coverage, binStep: result.bin_step, baseFee: result.base_fee }).catch(() => {});
       } else if (name === "close_position") {
-        notifyClose({ pair: result.pool_name || args.position_address?.slice(0, 8), pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0 }).catch(() => {});
+        // Use the rich 8-line emoji format (matches /close command output)
+        try {
+          const tracked = getTrackedPosition(args.position_address) || {};
+          let solPriceUsd = 0;
+          try { solPriceUsd = await getSolPrice(); } catch {}
+          // Build a pos stub from what we know; format.js falls back gracefully
+          const posStub = {
+            pair: result.pool_name || tracked.pool_name || args.position_address?.slice(0, 8),
+            pnl_usd: result.pnl_usd,
+            pnl_pct: result.pnl_pct,
+            amount_sol: tracked.amount_sol,
+            initial_value_usd: tracked.initial_value_usd,
+            collected_fees_usd: result.fees_earned_usd ?? tracked.collected_fees_usd,
+            peak_pnl_pct: tracked.peak_pnl_pct,
+            lowest_pnl_pct: tracked.lowest_pnl_pct,
+            exit_reason: args.reason || "MANAGER decision",
+            txs: result.close_txs || result.txs,
+          };
+          const block = formatClosedPosition({
+            pos: posStub,
+            result,
+            tracked,
+            market: { sol_price_usd: solPriceUsd },
+            config,
+          });
+          await sendMessage(block);
+        } catch (fmtErr) {
+          log("executor", `formatClosedPosition failed, falling back to notifyClose: ${fmtErr.message}`);
+          notifyClose({ pair: result.pool_name || args.position_address?.slice(0, 8), pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0 }).catch(() => {});
+        }
         // Note low-yield closes in pool memory so screener avoids redeploying
         if (args.reason && args.reason.toLowerCase().includes("yield")) {
           const poolAddr = result.pool || args.pool_address;

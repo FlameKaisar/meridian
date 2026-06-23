@@ -26,6 +26,26 @@ function nonEmptyChatId(value) {
   return trimmed || null;
 }
 
+// ─── HTML escape (for parse_mode="HTML" safety) ─────────────────
+// Telegram HTML parser chokes on text like "<= -15%" or "x < 3" —
+// any "<" not followed by a valid tag name (b/i/u/s/code/pre/a) is
+// rejected with "Unsupported start tag". We escape user/LLM-generated
+// content so the only "<" chars left are the ones we explicitly emit
+// as <b>/<i>/<code> etc.
+const HTML_ENTITIES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" };
+function escapeHtml(value) {
+  if (value == null) return "";
+  return String(value).replace(/[&<>"]/g, (ch) => HTML_ENTITIES[ch]);
+}
+// Strip our intentional <b>/<i>/<code>/<u>/<s>/<a>/<pre> tags from a
+// string so they can be safely re-escaped by escapeHtml. Use this to
+// untrusted strings that are allowed to contain a few tags.
+function escapeHtmlPreservingTags(value) {
+  if (value == null) return "";
+  // No-op for now — only call when caller guarantees no tags inside.
+  return escapeHtml(value);
+}
+
 // ─── chatId persistence ──────────────────────────────────────────
 function resolveChatId() {
   const fromEnv = nonEmptyChatId(process.env.TELEGRAM_CHAT_ID);
@@ -461,6 +481,9 @@ export function stopPolling() {
 }
 
 // ─── Notification helpers ────────────────────────────────────────
+// NOTE: All dynamic text passed into sendHTML() must be escaped via
+// escapeHtml() first. The only raw "<...>" allowed are the intentional
+// formatting tags <b>/<i>/<code>/<u>/<s>/<a> we emit ourselves.
 export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, rangeCoverage, binStep, baseFee }) {
   if (hasActiveLiveMessage()) return;
   const priceStr = priceRange
@@ -473,13 +496,13 @@ export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, 
     ? `Bin step: ${binStep ?? "?"}  |  Base fee: ${baseFee != null ? baseFee + "%" : "?"}\n`
     : "";
   await sendHTML(
-    `✅ <b>Deployed</b> ${pair}\n` +
-    `Amount: ${amountSol} SOL\n` +
+    `✅ <b>Deployed</b> ${escapeHtml(pair)}\n` +
+    `Amount: ${escapeHtml(amountSol)} SOL\n` +
     priceStr +
     coverageStr +
     poolStr +
-    `Position: <code>${position?.slice(0, 8)}...</code>\n` +
-    `Tx: <code>${tx?.slice(0, 16)}...</code>`
+    `Position: <code>${escapeHtml(position?.slice(0, 8))}...</code>\n` +
+    `Tx: <code>${escapeHtml(tx?.slice(0, 16))}...</code>`
   );
 }
 
@@ -487,25 +510,27 @@ export async function notifyClose({ pair, pnlUsd, pnlPct }) {
   if (hasActiveLiveMessage()) return;
   const sign = pnlUsd >= 0 ? "+" : "";
   await sendHTML(
-    `🔒 <b>Closed</b> ${pair}\n` +
+    `🔒 <b>Closed</b> ${escapeHtml(pair)}\n` +
     `PnL: ${sign}$${(pnlUsd ?? 0).toFixed(2)} (${sign}${(pnlPct ?? 0).toFixed(2)}%)`
   );
 }
 
 export async function notifySwap({ inputSymbol, outputSymbol, amountIn, amountOut, tx }) {
   if (hasActiveLiveMessage()) return;
+  const safeIn = amountIn == null ? "?" : escapeHtml(amountIn);
+  const safeOut = amountOut == null ? "?" : escapeHtml(amountOut);
   await sendHTML(
-    `🔄 <b>Swapped</b> ${inputSymbol} → ${outputSymbol}\n` +
-    `In: ${amountIn ?? "?"} | Out: ${amountOut ?? "?"}\n` +
-    `Tx: <code>${tx?.slice(0, 16)}...</code>`
+    `🔄 <b>Swapped</b> ${escapeHtml(inputSymbol)} → ${escapeHtml(outputSymbol)}\n` +
+    `In: ${safeIn} | Out: ${safeOut}\n` +
+    `Tx: <code>${escapeHtml(tx?.slice(0, 16))}...</code>`
   );
 }
 
 export async function notifyOutOfRange({ pair, minutesOOR }) {
   if (hasActiveLiveMessage()) return;
   await sendHTML(
-    `⚠️ <b>Out of Range</b> ${pair}\n` +
-    `Been OOR for ${minutesOOR} minutes`
+    `⚠️ <b>Out of Range</b> ${escapeHtml(pair)}\n` +
+    `Been OOR for ${escapeHtml(minutesOOR)} minutes`
   );
 }
 

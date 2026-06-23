@@ -41,6 +41,9 @@ export function appendDecision(entry) {
     risks: Array.isArray(entry.risks) ? entry.risks.map((r) => sanitize(r, 140)).filter(Boolean).slice(0, 6) : [],
     metrics: entry.metrics || {},
     rejected: Array.isArray(entry.rejected) ? entry.rejected.map((r) => sanitize(r, 180)).filter(Boolean).slice(0, 8) : [],
+    // audit details — preserved as JSON for types like "smart_wallet_autoadd"
+    // (decision-log is append-only with MAX_DECISIONS=100, kept small)
+    details: entry.details ? JSON.parse(JSON.stringify(entry.details)) : null,
   };
   data.decisions.unshift(decision);
   data.decisions = data.decisions.slice(0, MAX_DECISIONS);

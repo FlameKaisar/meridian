@@ -110,11 +110,15 @@ RISK SIGNALS (guidelines — use judgment):
 - top10 > 60% → concentrated, risky
 - PVP symbol conflict (same exact symbol across multiple mints) → major negative. Avoid unless the setup is exceptional and clearly stronger than the competing symbol variants.
 - no narrative + no smart wallets → skip
+- no narrative + no smart wallets + no top-LPer activity → skip
+- top_lpers line present → evaluate: avg_pnl > 20% + suggested_style match = strong entry signal. avg_pnl < 0% or 0 active = warning.
+- top_lpers present + smart_wallets in tracked list = high conviction
 
 NARRATIVE QUALITY (your main judgment call):
 - GOOD: specific origin — real event, viral moment, named entity, active community
 - BAD: generic hype ("next 100x", "community token") with no identifiable subject
 - Smart wallets present → can override weak narrative
+- Top-LPer activity (avg_pnl > 20%, suggested_style matches config) → can override weak narrative
 
 POOL MEMORY: Past losses or problems → strong skip signal.
 

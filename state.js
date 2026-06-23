@@ -104,6 +104,8 @@ export function trackPosition({
     closed_at: null,
     notes: [],
     peak_pnl_pct: 0,
+    lowest_pnl_pct: 0,
+    drawdown_recovery_active: false,
     pending_peak_pnl_pct: null,
     pending_peak_confirm_count: 0,
     pending_peak_started_at: null,
@@ -364,6 +366,18 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
 
   let changed = false;
 
+  // Update peak/low PnL tracking (only for trustworthy PnL values)
+  if (currentPnlPct != null && !pnl_pct_suspicious) {
+    if ((pos.peak_pnl_pct ?? 0) < currentPnlPct) {
+      pos.peak_pnl_pct = currentPnlPct;
+      changed = true;
+    }
+    if ((pos.lowest_pnl_pct ?? 0) > currentPnlPct) {
+      pos.lowest_pnl_pct = currentPnlPct;
+      changed = true;
+    }
+  }
+
   // Activate trailing TP once trigger threshold is reached
   if (mgmtConfig.trailingTakeProfit && !pos.trailing_active && (pos.peak_pnl_pct ?? 0) >= mgmtConfig.trailingTriggerPct) {
     pos.trailing_active = true;
@@ -383,6 +397,42 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
   }
 
   if (changed) save(state);
+
+  // ── Drawdown Recovery ───────────────────────────────────────
+  // Pattern: if PnL ever dropped to drawdownRecoveryTriggerPct (e.g. -10%),
+  // and now recovered to drawdownRecoveryTakeProfitPct (e.g. +2%), close.
+  // Lets you hold through drawdown to capture bounce instead of stop-loss exit.
+  let recoveryChanged = false;
+  if (
+    !pnl_pct_suspicious &&
+    currentPnlPct != null &&
+    mgmtConfig.drawdownRecoveryEnabled &&
+    mgmtConfig.drawdownRecoveryTriggerPct != null &&
+    mgmtConfig.drawdownRecoveryTakeProfitPct != null
+  ) {
+    const trigger = mgmtConfig.drawdownRecoveryTriggerPct;     // e.g. -10
+    const takeProfit = mgmtConfig.drawdownRecoveryTakeProfitPct; // e.g. 2
+    const low = pos.lowest_pnl_pct ?? 0;
+
+    // Activate recovery watch once lowest PnL hits trigger
+    if (!pos.drawdown_recovery_active && low <= trigger) {
+      pos.drawdown_recovery_active = true;
+      recoveryChanged = true;
+      log("state", `Position ${position_address} drawdown-recovery armed (low: ${low.toFixed(2)}% <= ${trigger}%)`);
+    }
+
+    // If armed and current PnL reaches take-profit level → exit
+    if (pos.drawdown_recovery_active && currentPnlPct >= takeProfit) {
+      if (recoveryChanged) save(state);
+      return {
+        action: "DRAWDOWN_RECOVERY",
+        reason: `Drawdown recovery: low ${low.toFixed(2)}% → current ${currentPnlPct.toFixed(2)}% (TP ${takeProfit}% reached)`,
+        low_pnl_pct: low,
+        current_pnl_pct: currentPnlPct,
+      };
+    }
+    if (recoveryChanged) save(state);
+  }
 
   // ── Stop loss ──────────────────────────────────────────────────
   if (!pnl_pct_suspicious && currentPnlPct != null && mgmtConfig.stopLossPct != null && currentPnlPct <= mgmtConfig.stopLossPct) {
