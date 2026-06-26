@@ -3,7 +3,6 @@ import { log } from "./logger.js";
 import { getPerformanceSummary } from "./lessons.js";
 import { repoPath } from "./repo-root.js";
 import { config } from "./config.js";
-import { formatClosedPositionsList } from "./tools/format.js";
 
 const STATE_FILE = repoPath("state.json");
 const LESSONS_FILE = repoPath("lessons.json");
@@ -63,36 +62,7 @@ export async function generateBriefing() {
     "",
     `<b>Closed Positions (24h):</b>`,
     perfLast24h.length > 0
-      ? formatClosedPositionsList(
-          perfLast24h.map(p => ({
-            pos: {
-              pair: p.pool_name || "—",
-              position: p.position,
-              pnl_pct: p.pnl_pct,
-              in_range: p.minutes_out_of_range === 0,
-              age_minutes: p.minutes_held,
-              minutes_out_of_range: (p.minutes_held || 0) - (p.minutes_in_range || 0),
-              bin_step: p.bin_step,
-              volatility: p.volatility,
-              fee_tvl_ratio: p.fee_tvl_ratio,
-              entry_mcap: p.entry_mcap,
-            },
-            result: {
-              success: true,
-              pnl_usd: p.pnl_usd,
-              pnl_pct: p.pnl_pct,
-              fees_earned_usd: p.fees_earned_usd,
-            },
-            tracked: {
-              amount_sol: p.amount_sol,
-              initial_value_usd: p.initial_value_usd,
-              minutes_in_range: p.minutes_in_range,
-              minutes_held: p.minutes_held,
-            },
-            market: { sol_price_usd: solPriceUsd },
-          })),
-          { management: { solMode: config.management?.solMode ?? false } }
-        )
+      ? formatTopBottomPositions(perfLast24h, solPriceUsd)
       : "• No positions closed in the last 24h.",
     "",
     `<b>Lessons Learned:</b>`,
@@ -119,4 +89,63 @@ function loadJson(file) {
     log("briefing_error", `Failed to read ${file}: ${err.message}`);
     return null;
   }
+}
+
+/**
+ * Format closed positions as Top 5 / Bottom 5 with 4 lines each.
+ * Matches the format shown in the user's reference image.
+ */
+function formatTopBottomPositions(perf, solPriceUsd) {
+  // Sort by pnl_pct descending
+  const sorted = [...perf].sort((a, b) => (b.pnl_pct ?? 0) - (a.pnl_pct ?? 0));
+  const top5 = sorted.slice(0, 5);
+  // Bottom 5: from the rest (exclude top5)
+  const rest = sorted.slice(5);
+  const bottom5 = rest.slice(-5).reverse();
+
+  const fmtUsd = (v) => {
+    if (v == null) return "—";
+    return `$${v.toFixed(2)}`;
+  };
+  const fmtPct = (v) => {
+    if (v == null) return "—";
+    const sign = v >= 0 ? "+" : "";
+    return `${sign}${v.toFixed(2)}%`;
+  };
+
+  function renderPosition(p, index, isTop) {
+    const pair = p.pool_name || p.base_mint?.slice(0, 6) || "—";
+    const pnl = p.pnl_pct ?? 0;
+    const deposit = p.initial_value_usd ?? 0;
+    // Withdraw = deposit + pnl_usd (more accurate than final_value_usd)
+    const withdraw = deposit + (p.pnl_usd ?? 0);
+    // Clean up close_reason: remove duplicate prefixes AND escape HTML chars
+    let reason = p.close_reason || "—";
+    reason = reason.replace(/^Trailing TP:\s*Trailing TP:\s*/i, "Trailing TP: ");
+    // Escape HTML meta chars in reason text (Telegram parse_mode=HTML)
+    reason = reason.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const emoji = pnl >= 0 ? "🟢" : "🔴";
+
+    const entry = [
+      `${index + 1}. <b>${pair}</b> ${emoji}`,
+      `   • PnL: ${fmtPct(pnl)}`,
+      `   • Deposit: ${fmtUsd(deposit)}`,
+      `   • Withdraw: ${fmtUsd(withdraw)}`,
+    ];
+    if (reason !== "—") {
+      entry.push(`   • ${reason}`);
+    }
+    return entry.join("\n");
+  }
+
+  const lines = ["<b>Best Positions:</b>"];
+  top5.forEach((p, i) => lines.push(renderPosition(p, i, true)));
+
+  if (bottom5.length > 0) {
+    lines.push("");
+    lines.push("<b>Worst Positions:</b>");
+    bottom5.forEach((p, i) => lines.push(renderPosition(p, i, false)));
+  }
+
+  return lines.join("\n");
 }
