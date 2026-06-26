@@ -1491,7 +1491,8 @@ async function telegramHandler(msg) {
       const positionBlocks = positions.map((p, i) => {
         const pnlSign = (p.pnl_usd || 0) >= 0 ? "+" : "-";
         const pnlAbs = Math.abs(p.pnl_usd || 0);
-        const pnlPct = p.pnl_pct != null ? `${pnlPct >= 0 ? "+" : ""}${p.pnl_pct.toFixed(2)}%` : "?";
+        const pnlPctVal = p.pnl_pct != null ? p.pnl_pct : null;
+        const pnlPct = pnlPctVal != null ? `${pnlPctVal >= 0 ? "+" : ""}${pnlPctVal.toFixed(2)}%` : "?";
         const inRangeStr = p.in_range ? "IN RANGE 🟢" : "OUT OF RANGE 🔴";
         const rangeMinutes = p.minutes_out_of_range ?? (p.in_range ? 0 : "?");
         const rangeTime = rangeMinutes != null && rangeMinutes !== "?" ? `${rangeMinutes}m` : "?";
