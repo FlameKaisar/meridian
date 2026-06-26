@@ -124,10 +124,14 @@ async function getMeteoraData(conn, walletAddress, flat) {
   }
 
   const byPosition = {};
-  await Promise.all([...positionsByPool.entries()].map(async ([pool, positionAddrs]) => {
+  // Sequential to avoid RPC 429
+  for (const [pool, positionAddrs] of positionsByPool.entries()) {
     const cached = _meteoraCache.get(pool);
     const sigByPosition = {};
-    await Promise.all(positionAddrs.map(async (addr) => { sigByPosition[addr] = await getLatestSig(conn, addr); }));
+    // Sequential getLatestSig calls
+    for (const addr of positionAddrs) {
+      sigByPosition[addr] = await getLatestSig(conn, addr);
+    }
 
     const ageOk = cached && Date.now() - cached.at < ttlMs;
     const sigsMatch = cached && positionAddrs.every((a) => cached.sigByPosition?.[a] === sigByPosition[a]);
@@ -140,7 +144,7 @@ async function getMeteoraData(conn, walletAddress, flat) {
       _meteoraCache.set(pool, { at: Date.now(), byPosition: data, sigByPosition });
     }
     for (const addr of positionAddrs) byPosition[addr] = data[addr] || null;
-  }));
+  }
 
   return byPosition;
 }
@@ -283,10 +287,9 @@ export async function computePositions(walletAddress) {
     return { wallet: walletAddress, total_positions: 0, positions: [], source: "rpc" };
   }
 
-  const [prices, meteoraByPosition] = await Promise.all([
-    getJupiterPrices([SOL_MINT, ...flat.map((f) => f.baseMint)]),
-    getMeteoraData(conn, walletAddress, flat),
-  ]);
+  // Sequential to avoid RPC 429
+  const prices = await getJupiterPrices([SOL_MINT, ...flat.map((f) => f.baseMint)]);
+  const meteoraByPosition = await getMeteoraData(conn, walletAddress, flat);
   const solUsd = prices[SOL_MINT] ?? null;
 
   const positions = flat.map((f) => buildPosition(f, prices, solUsd, meteoraByPosition[f.position], solMode));

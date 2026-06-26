@@ -1,3 +1,15 @@
+// Sequential map with delay to avoid 429 rate limits
+async function sequentialMap(items, fn, delayMs = 300) {
+  const results = [];
+  for (const item of items) {
+    const r = await fn(item).catch(e => ({ status: "rejected", reason: e }));
+    if (r && r.status === undefined) results.push({ status: "fulfilled", value: r });
+    else results.push(r);
+    if (delayMs > 0) await new Promise(res => setTimeout(res, delayMs));
+  }
+  return results;
+}
+
 import { config } from "../config.js";
 import { isBlacklisted } from "../token-blacklist.js";
 import { isDevBlocked, getBlockedDevs } from "../dev-blocklist.js";
@@ -253,15 +265,16 @@ async function applyVolatilityTimeframe(rawPools, sourceTimeframe) {
   if (sourceTimeframe === volatilityTimeframe) return rawPools;
 
   const uniquePoolAddresses = [...new Set(rawPools.map((pool) => pool?.pool_address).filter(Boolean))];
-  const longResults = await Promise.allSettled(
-    uniquePoolAddresses.map((poolAddress) =>
+  const longResults = await sequentialMap(
+    uniquePoolAddresses,
+    async (poolAddress) =>
       fetchPoolDiscoveryDetail({ poolAddress, timeframe: volatilityTimeframe })
         .then((pool) => ({
           poolAddress,
           volatility: numeric(pool?.volatility),
           volume: numeric(pool?.volume),
-        }))
-    )
+        })),
+    200
   );
 
   const metricsByPool = new Map();
@@ -302,12 +315,14 @@ async function enrichDiscordSignalLaunchpads(rawPools) {
   if (missing.length === 0) return;
 
   const uniqueMints = [...new Set(missing.map(getPoolBaseMint).filter(Boolean))];
-  const results = await Promise.allSettled(
-    uniqueMints.map(async (mint) => {
+  const results = await sequentialMap(
+    uniqueMints,
+    async (mint) => {
       const assets = await searchAssetsBySymbol(mint);
       const asset = assets.find((item) => item?.id === mint) || assets[0] || null;
       return { mint, asset };
-    })
+    },
+    200
   );
 
   const byMint = new Map();
@@ -359,10 +374,10 @@ async function enrichPvpRisk(pools) {
 
   const symbolCache = new Map();
 
-  await Promise.all(shortlist.map(async (pool) => {
+  for (const pool of shortlist) {
     const symbol = normalizeSymbol(pool.base?.symbol);
     const ownMint = pool.base?.mint;
-    if (!symbol || !ownMint) return;
+    if (!symbol || !ownMint) continue;
 
     let assets = symbolCache.get(symbol);
     if (!assets) {
@@ -395,7 +410,7 @@ async function enrichPvpRisk(pools) {
       log("screening", `PVP guard: ${pool.name} has active rival ${pool.pvp_rival_name} (${rival.id.slice(0, 8)})`);
       break;
     }
-  }));
+  }
 }
 
 
@@ -409,11 +424,12 @@ async function enrichPvpRisk(pools) {
 async function refreshDiscordOnlyPools(pools, timeframe) {
   if (!pools.length) return;
   const FIELDS = ["volume", "fee", "active_tvl", "tvl", "volatility", "fee_active_tvl_ratio"];
-  const results = await Promise.allSettled(
-    pools.map((pool) =>
+  const results = await sequentialMap(
+    pools,
+    async (pool) =>
       fetchPoolDiscoveryDetail({ poolAddress: pool.pool_address, timeframe })
-        .then((fresh) => ({ pool, fresh }))
-    )
+        .then((fresh) => ({ pool, fresh })),
+    200
   );
   for (const result of results) {
     if (result.status !== "fulfilled" || !result.value.fresh) continue;
@@ -593,16 +609,16 @@ export async function discoverPools({
   if (Object.keys(blockedDevs).length > 0) {
     const missingDev = pools.filter((p) => !p.dev && p.base?.mint);
     if (missingDev.length > 0) {
-      const devResults = await Promise.allSettled(
-        missingDev.map((p) =>
-          fetch(`${DATAPI_JUP}/assets/search?query=${p.base.mint}`)
+      const devResults = await sequentialMap(
+        missingDev,
+        async (p) =>
+          fetch(`${DATAPI_JUP}/assets/search?query=${encodeURIComponent(p.base.mint)}`)
             .then((r) => r.ok ? r.json() : null)
             .then((d) => {
               const t = Array.isArray(d) ? d[0] : d;
               return { pool: p.pool, dev: t?.dev || null };
-            })
-            .catch(() => ({ pool: p.pool, dev: null }))
-        )
+            }),
+        200
       );
       const devMap = {};
       for (const r of devResults) {
@@ -718,28 +734,29 @@ export async function getTopCandidates({ limit = 10 } = {}) {
   }
 
   if (config.indicators.enabled && eligible.length > 0) {
-    const confirmations = await Promise.all(
-      eligible.map(async (pool) => {
-        try {
-          const confirmation = await confirmIndicatorPreset({
-            mint: pool.base?.mint,
-            side: "entry",
-          });
-          return { pool: pool.pool, confirmation };
-        } catch (error) {
-          return {
-            pool: pool.pool,
-            confirmation: {
-              enabled: true,
-              confirmed: true,
-              skipped: true,
-              reason: `Indicator confirmation unavailable: ${error.message}`,
-              intervals: [],
-            },
-          };
-        }
-      }),
-    );
+    const confirmations = [];
+    for (const pool of eligible) {
+      try {
+        const confirmation = await confirmIndicatorPreset({
+          mint: pool.base?.mint,
+          side: "entry",
+        });
+        confirmations.push({ pool: pool.pool, confirmation });
+      } catch (error) {
+        confirmations.push({
+          pool: pool.pool,
+          confirmation: {
+            enabled: true,
+            confirmed: true,
+            skipped: true,
+            reason: `Indicator confirmation unavailable: ${error.message}`,
+            intervals: [],
+          },
+        });
+      }
+      // Small delay between indicator checks to avoid 429
+      if (eligible.length > 1) await new Promise(r => setTimeout(r, 100));
+    }
     const confirmationByPool = new Map(confirmations.map((entry) => [entry.pool, entry.confirmation]));
     const before = eligible.length;
     const confirmedEligible = eligible.filter((pool) => {

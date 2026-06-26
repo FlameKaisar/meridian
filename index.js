@@ -381,7 +381,10 @@ export async function runScreeningCycle({ silent = false } = {}) {
   let liveMessage = null;
   let screenReport = null;
   try {
-    [prePositions, preBalance] = await Promise.all([getMyPositions({ force: true }), getWalletBalances()]);
+    // Sequential to avoid RPC 429
+    prePositions = await getMyPositions({ force: true });
+    await new Promise(r => setTimeout(r, 200));
+    preBalance = await getWalletBalances();
     if (prePositions.total_positions >= config.risk.maxPositions) {
       log("cron", `Screening skipped — max positions reached (${prePositions.total_positions}/${config.risk.maxPositions})`);
       screenReport = `Screening skipped — max positions reached (${prePositions.total_positions}/${config.risk.maxPositions}).`;
@@ -439,21 +442,20 @@ export async function runScreeningCycle({ silent = false } = {}) {
     const allCandidates = [];
     for (const pool of candidates) {
       const mint = pool.base?.mint;
-      const [smartWallets, narrative, tokenInfo, study] = await Promise.allSettled([
-        checkSmartWalletsOnPool({ pool_address: pool.pool }),
-        mint ? getTokenNarrative({ mint }) : Promise.resolve(null),
-        mint ? getTokenInfo({ query: mint }) : Promise.resolve(null),
-        studyTopLPers({ pool_address: pool.pool, limit: 4 }),
-      ]);
+      // Sequential recon to avoid 429 rate limits (was: Promise.allSettled burst)
+      const smartWallets = await checkSmartWalletsOnPool({ pool_address: pool.pool }).catch(() => null);
+      const narrative = mint ? await getTokenNarrative({ mint }).catch(() => null) : null;
+      const tokenInfo = mint ? await getTokenInfo({ query: mint }).catch(() => null) : null;
+      const study = await studyTopLPers({ pool_address: pool.pool, limit: 4 }).catch(() => null);
       allCandidates.push({
         pool,
-        sw: smartWallets.status === "fulfilled" ? smartWallets.value : null,
-        n: narrative.status === "fulfilled" ? narrative.value : null,
-        ti: tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null,
-        study: study.status === "fulfilled" ? study.value : null,
+        sw: smartWallets,
+        n: narrative,
+        ti: tokenInfo?.results?.[0] ?? null,
+        study,
         mem: recallForPool(pool.pool),
       });
-      await new Promise(r => setTimeout(r, 150)); // avoid 429s
+      await new Promise(r => setTimeout(r, 500)); // avoid 429s (increased from 150ms)
     }
 
     // Hard filters after token recon — block launchpads and excessive Jupiter bot holders
@@ -528,10 +530,16 @@ export async function runScreeningCycle({ silent = false } = {}) {
       }
     }
 
-    // Pre-fetch active_bin for all passing candidates in parallel
-    const activeBinResults = await Promise.allSettled(
-      passing.map(({ pool }) => getActiveBin({ pool_address: pool.pool }))
-    );
+    // Pre-fetch active_bin for all passing candidates sequentially (avoid RPC 429)
+    const activeBinResults = [];
+    for (const { pool } of passing) {
+      try {
+        activeBinResults.push({ status: 'fulfilled', value: await getActiveBin({ pool_address: pool.pool }) });
+      } catch (err) {
+        activeBinResults.push({ status: 'rejected', reason: err });
+      }
+      await new Promise(r => setTimeout(r, 200));
+    }
 
     // Build compact candidate blocks
     const candidateBlocks = passing.map(({ pool, sw, n, ti, mem, study }, i) => {
@@ -807,10 +815,10 @@ Summarize the current portfolio health, total fees earned, and performance of al
       if (Date.now() - _screeningLastTriggered < oppCooldownMs) return;
       _opportunityPollBusy = true;
       try {
-        const [positions, balance] = await Promise.all([
-          getMyPositions({ force: true, silent: true }).catch(() => null),
-          getWalletBalances().catch(() => null),
-        ]);
+        // Sequential to avoid RPC 429
+        const positions = await getMyPositions({ force: true, silent: true }).catch(() => null);
+        await new Promise(r => setTimeout(r, 200));
+        const balance = await getWalletBalances().catch(() => null);
         if (!positions || (positions.total_positions ?? 0) >= config.risk.maxPositions) return;
         const minRequired = config.management.deployAmountSol + config.management.gasReserve;
         if (process.env.DRY_RUN !== "true" && (!balance || balance.sol < minRequired)) return;
@@ -1347,11 +1355,11 @@ async function deployLatestCandidate(index) {
   }
   if (_latestCandidates.length === 1) {
     const mint = candidate.base?.mint || candidate.base_mint || null;
-    const [smartWallets, narrative, tokenInfo] = await Promise.allSettled([
-      checkSmartWalletsOnPool({ pool_address: candidate.pool }),
-      mint ? getTokenNarrative({ mint }) : Promise.resolve(null),
-      mint ? getTokenInfo({ query: mint }) : Promise.resolve(null),
-    ]);
+    // Sequential to avoid RPC 429
+    const smartWallets = await checkSmartWalletsOnPool({ pool_address: candidate.pool }).catch(e => ({ status: 'rejected', reason: e }));
+    const narrative = mint ? await getTokenNarrative({ mint }).catch(e => ({ status: 'rejected', reason: e })) : { status: 'fulfilled', value: null };
+    await new Promise(r => setTimeout(r, 200));
+    const tokenInfo = mint ? await getTokenInfo({ query: mint }).catch(e => ({ status: 'rejected', reason: e })) : { status: 'fulfilled', value: null };
     const context = {
       pool: candidate,
       sw: smartWallets.status === "fulfilled" ? smartWallets.value : null,
@@ -1458,7 +1466,10 @@ async function telegramHandler(msg) {
 
   if (text === "/wallet" || text === "/status") {
     try {
-      const [wallet, positions] = await Promise.all([getWalletBalances(), getMyPositions({ force: true })]);
+      // Sequential to avoid RPC 429
+      const wallet = await getWalletBalances();
+      await new Promise(r => setTimeout(r, 200));
+      const positions = await getMyPositions({ force: true });
       const suffix = text === "/status" && positions.total_positions
         ? `\n\nUse /positions for the numbered list.`
         : "";
@@ -1973,11 +1984,13 @@ if (isMain && isTTY) {
 
   busy = true;
   try {
-    const [wallet, positions, { candidates, total_eligible, total_screened }] = await Promise.all([
-      getWalletBalances(),
-      getMyPositions({ force: true }),
-      getTopCandidates({ limit: 5 }),
-    ]);
+    // Sequential to avoid RPC 429 at startup
+    const wallet = await getWalletBalances();
+    await new Promise(r => setTimeout(r, 200));
+    const positions = await getMyPositions({ force: true });
+    await new Promise(r => setTimeout(r, 200));
+    const topResult = await getTopCandidates({ limit: 5 });
+    const { candidates, total_eligible, total_screened } = topResult;
 
     setLatestCandidates(candidates);
 
@@ -2075,7 +2088,10 @@ Commands:
 
     if (input === "/status") {
       await runBusy(async () => {
-        const [wallet, positions] = await Promise.all([getWalletBalances(), getMyPositions({ force: true })]);
+        // Sequential to avoid RPC 429
+        const wallet = await getWalletBalances();
+        await new Promise(r => setTimeout(r, 200));
+        const positions = await getMyPositions({ force: true });
         console.log(`\nWallet: ${wallet.sol} SOL  ($${wallet.sol_usd})`);
         console.log(`Positions: ${positions.total_positions}`);
         for (const p of positions.positions) {
@@ -2217,16 +2233,23 @@ Focus on: hold duration, entry/exit timing, what win rates look like, whether sc
   rl.on("close", () => shutdown("stdin closed"));
 
 } else if (isMain) {
-  // Non-TTY: start immediately
+  // Non-TTY: start immediately but stagger to avoid RPC 429 at startup
   log("startup", "Non-TTY mode — starting cron cycles immediately.");
-  startCronJobs();
-  maybeRunMissedBriefing().catch(() => { });
-  startPolling(telegramHandler);
-  (async () => {
+
+  // Delay cron jobs by 15s to let initial RPC calls settle
+  setTimeout(() => {
+    startCronJobs();
+  }, 15_000);
+
+  // Delay first screening cycle by 25s to avoid burst with getMyPositions at startup
+  setTimeout(async () => {
     try {
       await runScreeningCycle({ silent: false });
     } catch (e) {
       log("startup_error", e.message);
     }
-  })();
+  }, 25_000);
+
+  maybeRunMissedBriefing().catch(() => { });
+  startPolling(telegramHandler);
 }
