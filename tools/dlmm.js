@@ -1166,7 +1166,18 @@ export async function getMyPositions({ force = false, silent = false, wallet_add
       try {
         if (!silent) log("positions", `Computing PnL from RPC (${config.pnl.rpcUrl})...`);
         const rpcResult = await computePositions(walletAddress);
+        // Inject tracked data (entry_mcap, etc.) from state.json into RPC positions
         if (useLocalWallet) {
+          for (const p of rpcResult.positions) {
+            const tracked = getTrackedPosition(p.position);
+            if (tracked) {
+              p.entry_mcap = tracked.entry_mcap ?? p.entry_mcap ?? null;
+              p.entry_tvl = tracked.entry_tvl ?? p.entry_tvl ?? null;
+              p.entry_volume = tracked.entry_volume ?? p.entry_volume ?? null;
+              p.entry_holders = tracked.entry_holders ?? p.entry_holders ?? null;
+              p.instruction = tracked.instruction ?? p.instruction ?? null;
+            }
+          }
           syncOpenPositions(rpcResult.positions.map((p) => p.position));
           _positionsCache = rpcResult;
           _positionsCacheAt = Date.now();
@@ -1328,6 +1339,9 @@ export async function getMyPositions({ force = false, silent = false, wallet_add
           minutes_out_of_range: minutesOutOfRange(positionAddress),
           instruction:        tracked?.instruction ?? null,
           entry_mcap:         tracked?.entry_mcap ?? null,
+          entry_tvl:          tracked?.entry_tvl ?? null,
+          entry_volume:       tracked?.entry_volume ?? null,
+          entry_holders:      tracked?.entry_holders ?? null,
           fee_per_tvl_24h:    tracked?.fee_tvl_ratio ?? binData
             ? Math.round(parseFloat(binData.feePerTvl24h || 0) * 100) / 100
             : null,

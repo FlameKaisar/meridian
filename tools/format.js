@@ -5,7 +5,6 @@
 const SOL_MODE_DEFAULT = false;   // matches config.management.solMode default
 const IN_RANGE_OK_PCT  = 95;      // ≥ 95% in-range = 🎯
 const IN_RANGE_WARN_PCT = 80;     // ≥ 80% = ⚠️
-const IL_NEGLIGIBLE_PCT = 0.5;    // abs(drawdown) below this = "No IL loss"
 
 const fmtSol  = (x, d=4) => x == null ? "—" : `◎${(+x).toFixed(d)}`;
 const fmtUsd  = (x, d=2) => x == null ? "—" : `$${(+x).toFixed(d)}`;
@@ -54,13 +53,6 @@ export function formatClosedPosition({ pos, result = {}, tracked = {}, market = 
                ?? pos.collected_fees_usd ?? pos.all_time_fees_usd
                ?? pos.unclaimed_fees_usd ?? 0;
   const feesSol = solUsd > 0 ? feesUsd / solUsd : 0;
-  // IL proxy: peak_pnl_pct - lowest_pnl_pct (drawdown in pnl pct space)
-  const peakPnlPct  = pos.peak_pnl_pct  ?? tracked.peak_pnl_pct  ?? 0;
-  const lowestPnlPct = pos.lowest_pnl_pct ?? tracked.lowest_pnl_pct ?? 0;
-  const drawdownPct = peakPnlPct - lowestPnlPct;
-  const ilNegligible = Math.abs(drawdownPct) < IL_NEGLIGIBLE_PCT;
-  const ilUsd = ilNegligible ? 0 : (modalUsd * (-drawdownPct) / 100);
-  const ilSol = solUsd > 0 ? ilUsd / solUsd : 0;
   // In-range %
   const ageMin = pos.age_minutes ?? pos.minutes_held ?? tracked.minutes_held ?? null;
   let inRangePct;
@@ -112,16 +104,6 @@ export function formatClosedPosition({ pos, result = {}, tracked = {}, market = 
   else if (inRangePct >= IN_RANGE_WARN_PCT) inRangeStr = `${inRangePct}% In-Range ⚠️`;
   else                                      inRangeStr = `${inRangePct}% In-Range ❌`;
 
-  // ---- IL line ----
-  let ilLine;
-  if (ilNegligible) {
-    ilLine = `📉 IL      : ✅ +${sym(ilUsd, ilSol)} | ✅ No IL loss`;
-  } else if (ilUsd < 0) {
-    ilLine = `📉 IL      : ❌ ${sym(ilUsd, ilSol)} (${fmtPct(-drawdownPct, 2, true)})`;
-  } else {
-    ilLine = `📉 IL      : ⚠️ +${sym(ilUsd, ilSol)} (${fmtPct(drawdownPct, 2, true)})`;
-  }
-
   // ---- PnL line ----
   const pnlIcon = isFlat ? "➖" : isWin ? "✅" : "❌";
   const pnlLine = `💰 PnL     : ${symP(pnlUsd, pnlSol)} ${pnlIcon}`;
@@ -158,7 +140,6 @@ export function formatClosedPosition({ pos, result = {}, tracked = {}, market = 
     `📥 Modal   : ${modalStr}`,
     pnlLine,
     `💸 Fees   : ${sym(feesUsd, feesSol)}`,
-    ilLine,
     `🤖 Exit   : ${exitClean}`,
     `⏱️ Duration: ${fmtDuration(durationMin)} | ${inRangeStr}`,
     `🔄 Kembali: ${kembaliStr} (${deltaStr} dari modal)`,

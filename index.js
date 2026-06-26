@@ -300,22 +300,89 @@ export async function runManagementCycle({ silent = false } = {}) {
       actionMap.set(p.position, { action: "STAY" });
     }
 
-    // ── Build JS report ──────────────────────────────────────────────
+    // ── Build JS report — /positions-style ─────────────────────────
+    const SEP = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
     const totalValue = positionData.reduce((s, p) => s + (p.total_value_usd ?? 0), 0);
-    const totalUnclaimed = positionData.reduce((s, p) => s + (p.unclaimed_fees_usd ?? 0), 0);
+    const cur = config.management.solMode ? "◎" : "$";
+    const fmtVal = (v) => v != null ? `${cur}${typeof v === "number" ? v.toFixed(2) : v}` : `${cur}0.00`;
+    const fmtMcap = (entry, current) => {
+      const f = (v) => {
+        if (v == null) return "—";
+        if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
+        if (v >= 1_000) return `${(v / 1_000).toFixed(0)}k`;
+        return `${v.toFixed(0)}`;
+      };
+      if (entry == null && current == null) return "$— → $—";
+      return `$${f(entry)} → $${f(current ?? entry)}`;
+    };
+    const binBar = (active, lo, hi) => {
+      if (active == null || lo == null || hi == null || hi === lo) return "—";
+      if (active > hi) return "█".repeat(20) + " OUT ↑";
+      if (active < lo) return "░".repeat(20) + " OUT ↓";
+      const span = hi - lo;
+      const pos = (active - lo) / span;
+      const pct = Math.max(0, Math.min(1, pos));
+      const fill = Math.round(pct * 20);
+      const bar = "█".repeat(fill) + "░".repeat(20 - fill);
+      return `${bar} ${(pct * 100).toFixed(0)}%`;
+    };
+    const binLineFor = (p) => {
+      const a = p.active_bin, l = p.lower_bin, u = p.upper_bin;
+      if (a == null) return `${l ?? "?"} ← ? → ${u ?? "?"}`;
+      if (a > u) return `${l} ← ${u} → ${a} ↑`;
+      if (a < l) return `${a} ↓ ← ${l} → ${u}`;
+      return `${l} ← ${a} → ${u}`;
+    };
+    const emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"];
 
-    const reportLines = positionData.map((p) => {
+    const mgmtLines = ["🔄 Management Cycle", SEP];
+    mgmtLines.push(`💼 ${positions.length} positions | Total: ${fmtVal(totalValue)}`);
+    mgmtLines.push("");
+
+    positionData.forEach((p, i) => {
+      const num = emojis[i] || `${i + 1}.`;
       const act = actionMap.get(p.position);
-      const inRange = p.in_range ? "🟢 IN" : `🔴 OOR ${p.minutes_out_of_range ?? 0}m`;
-      const val = config.management.solMode ? `◎${p.total_value_usd ?? "?"}` : `$${p.total_value_usd ?? "?"}`;
-      const unclaimed = config.management.solMode ? `◎${p.unclaimed_fees_usd ?? "?"}` : `$${p.unclaimed_fees_usd ?? "?"}`;
-      const statusLabel = act.action === "INSTRUCTION" ? "HOLD (instruction)" : act.action;
-      let line = `**${p.pair}** | Age: ${p.age_minutes ?? "?"}m | Val: ${val} | Unclaimed: ${unclaimed} | PnL: ${p.pnl_pct ?? "?"}% | Yield: ${p.fee_per_tvl_24h ?? "?"}% | ${inRange} | ${statusLabel}`;
-      if (p.instruction) line += `\nNote: "${p.instruction}"`;
-      if (act.action === "CLOSE" && act.rule === "exit") line += `\n⚡ Trailing TP: ${act.reason}`;
-      if (act.action === "CLOSE" && act.rule && act.rule !== "exit") line += `\nRule ${act.rule}: ${act.reason}`;
-      if (act.action === "CLAIM") line += `\n→ Claiming fees`;
-      return line;
+      const pnlVal = p.pnl_usd || 0;
+      const pnlPctVal = p.pnl_pct != null ? p.pnl_pct : 0;
+      const pnlValStr = pnlVal >= 0
+        ? `+$${Math.abs(pnlVal).toFixed(2)}`
+        : `-$${Math.abs(pnlVal).toFixed(2)}`;
+      const pnlPctStr = pnlPctVal >= 0
+        ? `+${pnlPctVal.toFixed(2)}%`
+        : `${pnlPctVal.toFixed(2)}%`;
+      const statusIcon = p.in_range ? "🟢 IN RANGE" : `🔴 OUT OF RANGE`;
+      const statusMin = p.in_range
+        ? (p.minutes_in_range || p.age_minutes || 0)
+        : (p.minutes_out_of_range ?? 0);
+      const statusLabel = `${statusIcon} ${statusMin}m`;
+      const ageMin = p.age_minutes ?? 0;
+      const fees = p.unclaimed_fees_usd ?? 0;
+      const feeTvl = p.fee_per_tvl_24h ?? 0;
+
+      mgmtLines.push(`${num} 🪙 ${p.pair}`);
+      mgmtLines.push(`├ Value     : ${fmtVal(p.total_value_usd)}`);
+      mgmtLines.push(`├ Mcap      : ${fmtMcap(p.entry_mcap, p.current_mcap)}`);
+      mgmtLines.push(`├ PnL       : ${pnlValStr} (${pnlPctStr})`);
+      mgmtLines.push(`├ Fees      : ${cur}${fees.toFixed(2)}`);
+      mgmtLines.push(`├ Status    : ${statusLabel}`);
+      mgmtLines.push(`├ Age       : ${ageMin}m`);
+      mgmtLines.push(`├ Position  : ${binBar(p.active_bin, p.lower_bin, p.upper_bin)}`);
+      mgmtLines.push(`├ Bin       : ${binLineFor(p)}`);
+      mgmtLines.push(`└ Fee/TVL   : ${feeTvl.toFixed(2)}%`);
+
+      // Action annotation
+      if (act.action === "CLOSE" && act.rule === "exit") {
+        mgmtLines.push(`⚡ ${act.reason}`);
+      } else if (act.action === "CLOSE" && act.rule && act.rule !== "exit") {
+        mgmtLines.push(`Rule ${act.rule}: ${act.reason}`);
+      } else if (act.action === "CLAIM") {
+        mgmtLines.push(`→ Claiming fees`);
+      } else if (act.action === "INSTRUCTION") {
+        mgmtLines.push(`📝 ${p.instruction || "instruction pending"}`);
+      } else if (act.action === "STAY") {
+        mgmtLines.push(`→ STAY`);
+      }
+      mgmtLines.push("");
     });
 
     const needsAction = [...actionMap.values()].filter(a => a.action !== "STAY");
@@ -323,9 +390,8 @@ export async function runManagementCycle({ silent = false } = {}) {
       ? needsAction.map(a => a.action === "INSTRUCTION" ? "EVAL instruction" : `${a.action}${a.reason ? ` (${a.reason})` : ""}`).join(", ")
       : "no action";
 
-    const cur = config.management.solMode ? "◎" : "$";
-    mgmtReport = reportLines.join("\n\n") +
-      `\n\nSummary: 💼 ${positions.length} positions | ${cur}${totalValue.toFixed(4)} | fees: ${cur}${totalUnclaimed.toFixed(4)} | ${actionSummary}`;
+    mgmtReport = mgmtLines.join("\n").trimEnd() +
+      `\n\nSummary: 💼 ${positions.length} positions | ${fmtVal(totalValue)} | fees: ${cur}${(positionData.reduce((s, p) => s + (p.unclaimed_fees_usd ?? 0), 0)).toFixed(4)} | ${actionSummary}`;
 
     // ── Call LLM only if action needed ──────────────────────────────
     const actionPositions = positionData.filter(p => {
@@ -1485,11 +1551,12 @@ async function telegramHandler(msg) {
       const fmtVal = (v) => v != null ? `${cur}${typeof v === "number" ? v.toFixed(2) : v}` : `${cur}0.00`;
       const fmtMcap = (entry, current) => {
         const f = (v) => {
-          if (v == null) return "?";
+          if (v == null) return "—";
           if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
           if (v >= 1_000) return `${(v / 1_000).toFixed(0)}k`;
           return `${v.toFixed(0)}`;
         };
+        if (entry == null && current == null) return "$— → $—";
         return `$${f(entry)} → $${f(current ?? entry)}`;
       };
       const SEP = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
