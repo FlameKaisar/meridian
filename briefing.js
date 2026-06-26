@@ -96,7 +96,8 @@ export async function generateBriefing() {
     const deposit = p.initial_value_usd != null ? `Deposit $${p.initial_value_usd.toFixed(2)}` : "";
     const withdraw = (p.initial_value_usd != null && p.pnl_usd != null)
       ? `Withdraw $${(p.initial_value_usd + p.pnl_usd).toFixed(2)}` : "";
-    const reason = p.close_reason || p.action || "";
+    const reasonRaw = p.close_reason || p.action || "";
+    const reason = reasonRaw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     let line = `+ ${pair} | ${pnlStr}`;
     if (deposit) line += ` | ${deposit}`;
     if (withdraw) line += ` | ${withdraw}`;

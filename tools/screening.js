@@ -524,17 +524,40 @@ export async function discoverPools({
   // Client-side filter: only keep pairs where ONE side is SOL and the other is NOT a stablecoin
   if (s.solPairsOnly !== false) {
     const beforeCount = rawPools.length;
+    const skippedDetails = [];
     rawPools = rawPools.filter((pool) => {
       const bSymbol = String(pool.base_token_symbol || "").trim().toUpperCase();
       const qSymbol = String(pool.quote_token_symbol || "").trim().toUpperCase();
-      // Accept only if one side is SOL and the other is NOT empty/stablecoin
-      const hasSol = bSymbol === "SOL" || qSymbol === "SOL";
-      const other = bSymbol === "SOL" ? qSymbol : bSymbol;
+      const poolName = String(pool.name || pool.pool_address || "").toUpperCase();
+
+      // Primary: check metadata symbols
+      let hasSol = bSymbol === "SOL" || qSymbol === "SOL";
+      let other = hasSol ? (bSymbol === "SOL" ? qSymbol : bSymbol) : "";
+
+      // Fallback: if metadata is empty, check pool name for SOL suffix/prefix
+      // e.g. "drooling-SOL", "RKC-SOL", "SOL-USDC"
+      if (!hasSol && (bSymbol === "" || qSymbol === "")) {
+        if (poolName.endsWith("-SOL") || poolName.startsWith("SOL-") || poolName.includes("/SOL")) {
+          hasSol = true;
+          // Extract the other token from pool name
+          const parts = poolName.split(/[-/]/);
+          other = (parts[0] === "SOL" ? parts[1] : parts[0])?.trim() || "";
+        }
+      }
+
       const stablecoins = ["USDC", "USDT", "DAI", "USDS", "PYUSD", "USD"];
-      return hasSol && other !== "" && !stablecoins.includes(other);
+      const accepted = hasSol && other !== "" && !stablecoins.includes(other);
+      if (!accepted) {
+        const reason = !hasSol ? "no SOL" : (other === "" ? "empty symbol" : `stablecoin (${other})`);
+        skippedDetails.push(`${pool.name || pool.pool_address || "unknown"} (${bSymbol}-${qSymbol}) → ${reason}`);
+      }
+      return accepted;
     });
     const skipped = beforeCount - rawPools.length;
-    if (skipped > 0) log("screening", `solPairsOnly filter skipped ${skipped} non-SOL pair(s)`);
+    if (skipped > 0) {
+      log("screening", `solPairsOnly filter skipped ${skipped} non-SOL pair(s):`);
+      skippedDetails.forEach(d => log("screening", `  • ${d}`));
+    }
   }
 
   const filteredExamples = [];
