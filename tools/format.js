@@ -129,7 +129,13 @@ export function formatClosedPosition({ pos, result = {}, tracked = {}, market = 
   const metaLine = `📊 Meta    : ${metaParts.join(" | ") || "—"}`;
 
   // ---- Exit reason (truncate to 200 chars to keep telegram happy) ----
-  const exitClean = exitReason.length > 200 ? exitReason.slice(0, 197) + "..." : exitReason;
+  let exitClean = exitReason;
+  if (exitReason === "low yield") {
+    const minFee = config.management?.minFeePerTvl24h;
+    const minAge = config.management?.minAgeBeforeYieldCheck;
+    exitClean = `low yield (fee/TVL < ${minFee}% setelah ${minAge}m)`;
+  }
+  exitClean = exitClean.length > 200 ? exitClean.slice(0, 197) + "..." : exitClean;
 
   // ---- Tx hashes (compact) ----
   const allTxs = [
