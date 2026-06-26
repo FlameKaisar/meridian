@@ -98,6 +98,7 @@ export const config = {
     blockedLaunchpads:  u.blockedLaunchpads  ?? [],  // e.g. ["letsbonk.fun", "pump.fun"]
     minTokenAgeHours:   u.minTokenAgeHours   ?? null, // null = no minimum
     maxTokenAgeHours:   u.maxTokenAgeHours   ?? null, // null = no maximum
+    solPairsOnly:       u.solPairsOnly       ?? true,  // default: only deploy to SOL pairs
   },
 
   // ─── Position Management ────────────────

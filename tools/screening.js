@@ -521,6 +521,18 @@ export async function discoverPools({
   rawPools = await applyVolatilityTimeframe(rawPools, s.timeframe);
   await enrichDiscordSignalLaunchpads(rawPools);
 
+  // Client-side filter: skip non-SOL pairs when solPairsOnly is enabled
+  // (Meteora API doesn't support quote_token_symbol filter, so we do it here)
+  if (s.solPairsOnly !== false) {
+    const beforeCount = rawPools.length;
+    rawPools = rawPools.filter((pool) => {
+      const qSymbol = String(pool.quote_token_symbol || "").trim().toUpperCase();
+      return qSymbol === "SOL" || qSymbol === "";  // empty = unknown, allow through
+    });
+    const skipped = beforeCount - rawPools.length;
+    if (skipped > 0) log("screening", `solPairsOnly filter skipped ${skipped} non-SOL pair(s)`);
+  }
+
   const filteredExamples = [];
   const thresholdedRawPools = rawPools.filter((pool) => {
     const reason = getRawPoolScreeningRejectReason(pool, s);
