@@ -36,16 +36,22 @@ export function formatClosedPosition({ pos, result = {}, tracked = {}, market = 
   const solUsd  = market.sol_price_usd ?? 0;
 
   // ---- Source-of-truth: result (post-close RPC) → pos (live) → tracked (state.json) ----
-  // PnL
+  // PnL — always recalc % from our tracked modal to avoid Meteora's misleading pnl_pct
   const pnlUsd   = result.pnl_usd ?? pos.pnl_usd ?? 0;
-  const pnlPct   = result.pnl_pct ?? pos.pnl_pct ?? 0;
-  // Modal (entry SOL)
   const modalSol = tracked.amount_sol
                 ?? pos.amount_sol
                 ?? pos.initial_value_sol
                 ?? 0;
   // Convert modal to USD using entry market if no USD snapshot
-  const modalUsd = tracked.initial_value_usd ?? pos.initial_value_usd ?? (modalSol * solUsd);
+  // Prefer reverse-calc from Meteora PnL (on-chain truth) — avoids accumulated
+  // initial_value_usd from re-seeds which Meteora doesn't account for.
+  let modalUsd;
+  if (result.pnl_usd != null && result.pnl_pct != null && result.pnl_pct !== 0) {
+    modalUsd = Math.abs(result.pnl_usd / (result.pnl_pct / 100));
+  } else {
+    modalUsd = tracked.initial_value_usd ?? pos.initial_value_usd ?? (modalSol * solUsd);
+  }
+  const pnlPct   = modalUsd > 0 ? (pnlUsd / modalUsd) * 100 : 0;
   // PnL in SOL (if solMode)
   const pnlSol = solUsd > 0 ? pnlUsd / solUsd : 0;
   // Fees (collected + unclaimed, both USD)
