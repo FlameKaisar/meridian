@@ -1479,13 +1479,42 @@ async function telegramHandler(msg) {
       const { positions, total_positions } = await getMyPositions({ force: true });
       if (total_positions === 0) { await sendMessage("No open positions."); return; }
       const cur = config.management.solMode ? "◎" : "$";
-      const lines = positions.map((p, i) => {
-        const pnl = p.pnl_usd >= 0 ? `+${cur}${p.pnl_usd}` : `-${cur}${Math.abs(p.pnl_usd)}`;
-        const age = p.age_minutes != null ? `${p.age_minutes}m` : "?";
-        const oor = !p.in_range ? " ⚠️OOR" : "";
-        return `${i + 1}. ${p.pair} | ${cur}${p.total_value_usd} | PnL: ${pnl} | fees: ${cur}${p.unclaimed_fees_usd} | ${age}${oor}`;
+      const totalValue = positions.reduce((sum, p) => sum + (p.total_value_usd || 0), 0);
+      const formatSol = (v) => v != null ? `${cur}${typeof v === "number" ? v.toFixed(2) : v}` : `${cur}0.00`;
+      const formatMcap = (v) => {
+        if (v == null) return "?";
+        if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+        if (v >= 1_000) return `${(v / 1_000).toFixed(0)}k`;
+        return `${v.toFixed(0)}`;
+      };
+      const SEP = "━━━━━━━━━━━━━━━━━";
+      const positionBlocks = positions.map((p, i) => {
+        const pnlSign = (p.pnl_usd || 0) >= 0 ? "+" : "-";
+        const pnlAbs = Math.abs(p.pnl_usd || 0);
+        const pnlPct = p.pnl_pct != null ? `${pnlPct >= 0 ? "+" : ""}${p.pnl_pct.toFixed(2)}%` : "?";
+        const inRangeStr = p.in_range ? "IN RANGE 🟢" : "OUT OF RANGE 🔴";
+        const rangeMinutes = p.minutes_out_of_range ?? (p.in_range ? 0 : "?");
+        const rangeTime = rangeMinutes != null && rangeMinutes !== "?" ? `${rangeMinutes}m` : "?";
+        const progress = p.in_range ? "🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 100%" : "🟥🟥🟥🟥🟥⬛⬛⬛⬛⬛ OOR";
+        const bins = [p.lower_bin, p.active_bin, p.upper_bin].map(v => v != null ? v : "?").join("  ");
+        const feeTvl = p.fee_per_tvl_24h != null ? `${p.fee_per_tvl_24h.toFixed(2)}%` : "0.00%";
+        const mcap = formatMcap(p.entry_mcap);
+        return `${p.pair}
+Value: ${formatSol(p.total_value_usd)}
+Mcap: $${mcap}
+PnL: ${pnlSign}${cur}${pnlAbs.toFixed(2)} (${pnlPct})
+Fees: ${formatSol(p.unclaimed_fees_usd)}
+Status: ${inRangeStr} ${rangeTime}
+Age: ${p.age_minutes != null ? `${p.age_minutes}m` : "?"}
+${SEP}
+${progress}
+Bin: ${bins}
+Fee/TVL: ${feeTvl}`;
       });
-      await sendMessage(`📊 Open Positions (${total_positions}):\n\n${lines.join("\n")}\n\n/close <n> to close | /set <n> <note> to set instruction`);
+      const header = `OPEN POSITIONS\n(${total_positions}/${total_positions}) | Total: ${formatSol(totalValue)}`;
+      const footer = `${SEP}\n/close <n>\n/set <n>\n<note>`;
+      const msg = `${header}\n${SEP}\n${positionBlocks.join(`\n${SEP}\n`)}\n${footer}`;
+      await sendMessage(msg);
     } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => {}); }
     return;
   }

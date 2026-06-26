@@ -1327,6 +1327,10 @@ export async function getMyPositions({ force = false, silent = false, wallet_add
           age_minutes:        binData?.createdAt ? Math.floor((Date.now() - binData.createdAt * 1000) / 60000) : ageFromState,
           minutes_out_of_range: minutesOutOfRange(positionAddress),
           instruction:        tracked?.instruction ?? null,
+          entry_mcap:         tracked?.entry_mcap ?? null,
+          fee_per_tvl_24h:    tracked?.fee_tvl_ratio ?? binData
+            ? Math.round(parseFloat(binData.feePerTvl24h || 0) * 100) / 100
+            : null,
         });
       }
     }
