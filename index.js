@@ -1478,44 +1478,91 @@ async function telegramHandler(msg) {
     try {
       const { positions, total_positions } = await getMyPositions({ force: true });
       if (total_positions === 0) { await sendMessage("No open positions."); return; }
-      const cur = config.management.solMode ? "◎" : "$";
+      const solMode = config.management.solMode;
+      const cur = solMode ? "◎" : "$";
+      const cur4 = solMode ? 4 : 2;
       const totalValue = positions.reduce((sum, p) => sum + (p.total_value_usd || 0), 0);
-      const formatSol = (v) => v != null ? `${cur}${typeof v === "number" ? v.toFixed(2) : v}` : `${cur}0.00`;
-      const formatMcap = (v) => {
-        if (v == null) return "?";
-        if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
-        if (v >= 1_000) return `${(v / 1_000).toFixed(0)}k`;
-        return `${v.toFixed(0)}`;
+      const fmtVal = (v) => v != null ? `${cur}${typeof v === "number" ? v.toFixed(2) : v}` : `${cur}0.00`;
+      const fmtMcap = (entry, current) => {
+        const f = (v) => {
+          if (v == null) return "?";
+          if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
+          if (v >= 1_000) return `${(v / 1_000).toFixed(0)}k`;
+          return `${v.toFixed(0)}`;
+        };
+        return `$${f(entry)} → $${f(current ?? entry)}`;
       };
-      const SEP = "━━━━━━━━━━━━━━━━━";
-      const positionBlocks = positions.map((p, i) => {
-        const pnlSign = (p.pnl_usd || 0) >= 0 ? "+" : "-";
-        const pnlAbs = Math.abs(p.pnl_usd || 0);
-        const pnlPctVal = p.pnl_pct != null ? p.pnl_pct : null;
-        const pnlPct = pnlPctVal != null ? `${pnlPctVal >= 0 ? "+" : ""}${pnlPctVal.toFixed(2)}%` : "?";
-        const inRangeStr = p.in_range ? "IN RANGE 🟢" : "OUT OF RANGE 🔴";
-        const rangeMinutes = p.minutes_out_of_range ?? (p.in_range ? 0 : "?");
-        const rangeTime = rangeMinutes != null && rangeMinutes !== "?" ? `${rangeMinutes}m` : "?";
-        const progress = p.in_range ? "🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 100%" : "🟥🟥🟥🟥🟥⬛⬛⬛⬛⬛ OOR";
-        const bins = [p.lower_bin, p.active_bin, p.upper_bin].map(v => v != null ? v : "?").join("  ");
-        const feeTvl = p.fee_per_tvl_24h != null ? `${p.fee_per_tvl_24h.toFixed(2)}%` : "0.00%";
-        const mcap = formatMcap(p.entry_mcap);
-        return `${p.pair}
-Value: ${formatSol(p.total_value_usd)}
-Mcap: $${mcap}
-PnL: ${pnlSign}${cur}${pnlAbs.toFixed(2)} (${pnlPct})
-Fees: ${formatSol(p.unclaimed_fees_usd)}
-Status: ${inRangeStr} ${rangeTime}
-Age: ${p.age_minutes != null ? `${p.age_minutes}m` : "?"}
-${SEP}
-${progress}
-Bin: ${bins}
-Fee/TVL: ${feeTvl}`;
+      const SEP = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
+
+      // OOR-aware bin bar (from Obsidian diff 6)
+      const binBar = (active, lo, hi) => {
+        if (active == null || lo == null || hi == null || hi === lo) return "—";
+        if (active > hi) return "█".repeat(20) + " OUT ↑";
+        if (active < lo) return "░".repeat(20) + " OUT ↓";
+        const span = hi - lo;
+        const pos = (active - lo) / span;
+        const pct = Math.max(0, Math.min(1, pos));
+        const fill = Math.round(pct * 20);
+        const bar = "█".repeat(fill) + "░".repeat(20 - fill);
+        return `${bar} ${(pct * 100).toFixed(0)}%`;
+      };
+
+      // OOR-aware bin line (from Obsidian diff 6)
+      const binLineFor = (p) => {
+        const a = p.active_bin, l = p.lower_bin, u = p.upper_bin;
+        if (a == null) return `? ← ${l ?? "?"} → ${u ?? "?"}`;
+        if (a > u) return `${l} ← ${u} → ${a} ↑`;
+        if (a < l) return `${a} ↓ ← ${l} → ${u}`;
+        return `${l} ← ${a} → ${u}`;
+      };
+
+      const emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"];
+      const lines = [
+        "📊 OPEN POSITIONS",
+        SEP,
+        `(${total_positions}/${total_positions}) | Total: ${fmtVal(totalValue)}`,
+      ];
+
+      positions.forEach((p, i) => {
+        const num = emojis[i] || `${i + 1}.`;
+        const pnlVal = p.pnl_usd || 0;
+        const pnlPctVal = p.pnl_pct != null ? p.pnl_pct : 0;
+        const pnlValStr = pnlVal >= 0
+          ? `+${cur}${Math.abs(pnlVal).toFixed(2)}`
+          : `-${cur}${Math.abs(pnlVal).toFixed(2)}`;
+        const pnlPctStr = pnlPctVal >= 0
+          ? `+${pnlPctVal.toFixed(2)}%`
+          : `${pnlPctVal.toFixed(2)}%`;
+
+        const statusIcon = p.in_range ? "🟢" : "🔴";
+        const statusLabel = p.in_range ? "IN RANGE" : "OOR";
+        const rangeMins = p.in_range
+          ? (p.age_minutes ?? 0)
+          : (p.minutes_out_of_range ?? 0);
+        const ageMins = p.age_minutes ?? 0;
+        const mcapStr = fmtMcap(p.entry_mcap, p.current_mcap ?? p.entry_mcap);
+        const barStr = binBar(p.active_bin, p.lower_bin, p.upper_bin);
+        const blStr = binLineFor(p);
+        const feeTvlStr = p.fee_per_tvl_24h != null
+          ? `${p.fee_per_tvl_24h.toFixed(2)}%`
+          : "0.00%";
+
+        lines.push(
+          "",
+          `${num} 🪙 ${p.pair}`,
+          `├ Value     : ${fmtVal(p.total_value_usd)}`,
+          `├ Mcap      : ${mcapStr}`,
+          `├ PnL       : ${pnlValStr} (${pnlPctStr})`,
+          `├ Fees      : ${fmtVal(p.unclaimed_fees_usd)}`,
+          `├ Status    : ${statusIcon} ${statusLabel} ${rangeMins}m`,
+          `├ Age       : ${ageMins}m`,
+          `├ Position  : ${barStr}`,
+          `├ Bin       : ${blStr}`,
+          `└ Fee/TVL   : ${feeTvlStr}`,
+        );
       });
-      const header = `OPEN POSITIONS\n(${total_positions}/${total_positions}) | Total: ${formatSol(totalValue)}`;
-      const footer = `${SEP}\n/close <n>\n/set <n>\n<note>`;
-      const msg = `${header}\n${SEP}\n${positionBlocks.join(`\n${SEP}\n`)}\n${footer}`;
-      await sendMessage(msg);
+
+      await sendMessage(lines.join("\n"));
     } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => {}); }
     return;
   }
