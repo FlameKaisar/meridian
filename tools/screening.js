@@ -521,13 +521,17 @@ export async function discoverPools({
   rawPools = await applyVolatilityTimeframe(rawPools, s.timeframe);
   await enrichDiscordSignalLaunchpads(rawPools);
 
-  // Client-side filter: skip non-SOL pairs when solPairsOnly is enabled
-  // (Meteora API doesn't support quote_token_symbol filter, so we do it here)
+  // Client-side filter: only keep pairs where ONE side is SOL and the other is NOT a stablecoin
   if (s.solPairsOnly !== false) {
     const beforeCount = rawPools.length;
     rawPools = rawPools.filter((pool) => {
+      const bSymbol = String(pool.base_token_symbol || "").trim().toUpperCase();
       const qSymbol = String(pool.quote_token_symbol || "").trim().toUpperCase();
-      return qSymbol === "SOL" || qSymbol === "";  // empty = unknown, allow through
+      // Accept only if one side is SOL and the other is NOT empty/stablecoin
+      const hasSol = bSymbol === "SOL" || qSymbol === "SOL";
+      const other = bSymbol === "SOL" ? qSymbol : bSymbol;
+      const stablecoins = ["USDC", "USDT", "DAI", "USDS", "PYUSD", "USD"];
+      return hasSol && other !== "" && !stablecoins.includes(other);
     });
     const skipped = beforeCount - rawPools.length;
     if (skipped > 0) log("screening", `solPairsOnly filter skipped ${skipped} non-SOL pair(s)`);
