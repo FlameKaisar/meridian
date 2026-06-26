@@ -116,7 +116,7 @@ export function isEnabled() {
   return !!TOKEN;
 }
 
-async function postTelegram(method, body) {
+async function postTelegram(method, body, { ignoreNotFound = false } = {}) {
   if (!TOKEN || !chatId) return null;
   try {
     const res = await fetch(`${BASE}/${method}`, {
@@ -128,7 +128,7 @@ async function postTelegram(method, body) {
       const err = await res.text();
       if (res.status === 401) {
         log("telegram_error", `${method} 401 Unauthorized — check TELEGRAM_BOT_TOKEN in .env (invalid, revoked, or encrypted without .envrypt key)`);
-      } else {
+      } else if (!ignoreNotFound) {
         log("telegram_error", `${method} ${res.status}: ${err.slice(0, 200)}`);
       }
       return null;
@@ -184,19 +184,37 @@ export async function sendHTML(html) {
 
 export async function editMessage(text, messageId) {
   if (!TOKEN || !chatId || !messageId) return null;
-  return postTelegram("editMessageText", {
-    message_id: messageId,
-    text: String(text).slice(0, 4096),
-  });
+  try {
+    return await postTelegram("editMessageText", {
+      message_id: messageId,
+      text: String(text).slice(0, 4096),
+    }, { ignoreNotFound: true });
+  } catch (err) {
+    if (err?.description?.includes("message is not modified")) return null;
+    if (err?.description?.includes("message can't be edited") || err?.description?.includes("message to edit not found")) {
+      log("telegram", "editMessage " + messageId + " stale: " + (err.description || err));
+      return null;
+    }
+    throw err;
+  }
 }
 
 export async function editMessageWithButtons(text, messageId, inlineKeyboard) {
   if (!TOKEN || !chatId || !messageId) return null;
-  return postTelegram("editMessageText", {
-    message_id: messageId,
-    text: String(text).slice(0, 4096),
-    reply_markup: { inline_keyboard: inlineKeyboard },
-  });
+  try {
+    return await postTelegram("editMessageText", {
+      message_id: messageId,
+      text: String(text).slice(0, 4096),
+      reply_markup: { inline_keyboard: inlineKeyboard },
+    }, { ignoreNotFound: true });
+  } catch (err) {
+    if (err?.description?.includes("message is not modified")) return null;
+    if (err?.description?.includes("message can't be edited") || err?.description?.includes("message to edit not found")) {
+      log("telegram", "editMessageWithButtons " + messageId + " stale: " + (err.description || err));
+      return null;
+    }
+    throw err;
+  }
 }
 
 export async function answerCallbackQuery(callbackQueryId, text = "") {

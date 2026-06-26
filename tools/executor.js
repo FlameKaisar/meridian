@@ -219,8 +219,10 @@ function normalizeConfigValue(key, value) {
     "solMode",
     "darwinEnabled",
     "lpAgentRelayEnabled",
+    "chartIndicatorsEnabled",
+    "requireAllIntervals",
   ]);
-  const arrayKeys = new Set(["allowedLaunchpads", "blockedLaunchpads"]);
+  const arrayKeys = new Set(["allowedLaunchpads", "blockedLaunchpads", "indicatorIntervals"]);
   const stringKeys = new Set([
     "timeframe",
     "category",
@@ -238,6 +240,8 @@ function normalizeConfigValue(key, value) {
     "pnlSource",
     "pnlRpcUrl",
     "gmgnFeeSource",
+    "indicatorEntryPreset",
+    "indicatorExitPreset",
     "gmgnApiKey",
   ]);
   if (value === null) return null;
