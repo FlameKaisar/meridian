@@ -77,51 +77,12 @@ async function getDLMM() {
 // ─── Lazy wallet/connection init ──────────────────────────────
 // Avoids crashing on import when WALLET_PRIVATE_KEY is not yet set
 // (e.g. during screening-only tests).
-// ─── Throttled Connection wrapper ───────────────────────────────
-// Wraps every RPC method with a per-call delay to prevent 429 rate
-// limits from Helius. The SDK (getAllLbPairPositionsByUser etc.)
-// fires many getMultipleAccountsInfo / getProgramAccounts calls in
-// rapid succession — this proxy spaces them out.
-function createThrottledConnection(rpcUrl, commitment, { minDelayMs = 250 } = {}) {
-  const base = new Connection(rpcUrl, commitment);
-  let lastCallAt = 0;
-
-  const RPC_METHODS = [
-    "getAccountInfo", "getMultipleAccountsInfo", "getProgramAccounts",
-    "getParsedProgramAccounts", "getBalance", "getTokenAccountBalance",
-    "getTokenAccountsByOwner", "getParsedTokenAccountsByOwner",
-    "getSlot", "getBlockTime", "getLatestBlockhash", "getFeeForMessage",
-    "simulateTransaction", "sendTransaction", "sendRawTransaction",
-    "getBlockHeight", "getRecentPrioritizationFees",
-  ];
-
-  const handler = {
-    get(target, prop) {
-      const value = target[prop];
-      if (typeof value === "function" && RPC_METHODS.includes(prop)) {
-        return async (...args) => {
-          const now = Date.now();
-          const elapsed = now - lastCallAt;
-          if (elapsed < minDelayMs) {
-            await new Promise(r => setTimeout(r, minDelayMs - elapsed));
-          }
-          lastCallAt = Date.now();
-          return value.apply(target, args);
-        };
-      }
-      return value;
-    }
-  };
-
-  return new Proxy(base, handler);
-}
-
 let _connection = null;
 let _wallet = null;
 
 function getConnection() {
   if (!_connection) {
-    _connection = createThrottledConnection(process.env.RPC_URL, "confirmed", { minDelayMs: 250 });
+    _connection = new Connection(process.env.RPC_URL, "confirmed");
   }
   return _connection;
 }
@@ -1226,12 +1187,10 @@ export async function getMyPositions({ force = false, silent = false, wallet_add
     const pools = portfolio.pools || [];
     log("positions", `Found ${pools.length} pool(s) with open positions`);
 
-    // Fetch bin data sequentially to avoid RPC 429
+    // Fetch bin data (lowerBinId, upperBinId, poolActiveBinId) for all pools in parallel
+    // Needed for rules 3 & 4 (active_bin vs upper_bin comparison)
     const binDataByPool = {};
-    const pnlMaps = [];
-    for (const pool of pools) {
-      pnlMaps.push(await fetchDlmmPnlForPool(pool.poolAddress, walletAddress));
-    }
+    const pnlMaps = await Promise.all(pools.map(pool => fetchDlmmPnlForPool(pool.poolAddress, walletAddress)));
     pools.forEach((pool, i) => { binDataByPool[pool.poolAddress] = pnlMaps[i]; });
     const lpAgentByPosition = {}; // LPAgent removed — Meteora binData only
 
@@ -1418,12 +1377,9 @@ export async function getWalletPositions({ wallet_address }) {
       pool: new PublicKey(acc.account.data.slice(8, 40)).toBase58(),
     }));
 
-    // Enrich with PnL API — sequential to avoid RPC 429
+    // Enrich with PnL API
     const uniquePools = [...new Set(raw.map((r) => r.pool))];
-    const pnlMaps = [];
-    for (const pool of uniquePools) {
-      pnlMaps.push(await fetchDlmmPnlForPool(pool, wallet_address));
-    }
+    const pnlMaps = await Promise.all(uniquePools.map((pool) => fetchDlmmPnlForPool(pool, wallet_address)));
     const pnlByPool = {};
     uniquePools.forEach((pool, i) => { pnlByPool[pool] = pnlMaps[i]; });
 
