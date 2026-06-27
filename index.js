@@ -11,7 +11,7 @@ import { getWalletBalances, getSolPrice } from "./tools/wallet.js";
 import { getTopCandidates, degenScore } from "./tools/screening.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
-import { executeTool, registerCronRestarter } from "./tools/executor.js";
+import { executeTool, registerCronRestarter, getUserConfig } from "./tools/executor.js";
 import {
   startPolling,
   stopPolling,
@@ -35,6 +35,7 @@ import { studyTopLPers } from "./tools/study.js";
 import { stageSignals } from "./signal-tracker.js";
 import { getWeightsSummary } from "./signal-weights.js";
 import { bootstrapHiveMind, ensureAgentId, getHiveMindPullMode, isHiveMindEnabled, pullHiveMindLessons, pullHiveMindPresets, registerHiveMindAgent, startHiveMindBackgroundSync } from "./hivemind.js";
+import { isBuiltinPreset, applyPreset, computePresetDiff, getPresetParams, getCustomPresetParams, saveCustomPreset, listCustomPresets, deleteCustomPreset } from "./presets.js";
 import { appendDecision } from "./decision-log.js";
 
 import { REPO_ROOT, repoPath } from "./repo-root.js";
@@ -1194,6 +1195,7 @@ function renderSettingsMenu(page = "main") {
       settingButton("Risk", "cfg:page:risk"),
       settingButton("Screen", "cfg:page:screen"),
       settingButton("Indicators", "cfg:page:indicators"),
+			settingButton("Presets", "cfg:page:preset")
     ],
   ];
 
@@ -1204,7 +1206,7 @@ function renderSettingsMenu(page = "main") {
     ],
   ];
 
-  let rows;
+  let rows = [];
   if (page === "risk") {
     rows = [
       stepButtons("deployAmountSol", "Deploy", 0.1),
@@ -1254,7 +1256,43 @@ function renderSettingsMenu(page = "main") {
       ],
       stepButtons("rsiLength", "RSI len", 1, { digits: 0 }),
     ];
-  } else {
+  } else if (page === "preset") {
+    rows = [];
+    const cfg = getUserConfig();
+      const curr = cfg?.preset || "custom";
+      const isCustom = !["degen", "moderate", "safe"].includes(curr);
+      const activeLabel = isCustom ? `Custom: ${curr}` : (cfg?.presetName || curr);
+      const customList = listCustomPresets();
+
+      let text = `**Preset:** ${activeLabel}\n\n`;
+      text += `**Built-in:**\n`;
+      text += `/preset degen — 30m cycles, aggressive\n`;
+      text += `/preset moderate — 4h cycles, balanced\n`;
+      text += `/preset safe — 24h cycles, conservative`;
+
+      if (customList.length > 0) {
+        text += `\n\n**💾 Saved:**\n`;
+        for (const p of customList) {
+          const marker = p.name === curr ? " ✅" : "";
+          text += `\n• ${p.name} (${p.paramCount} params) — saved ${p.updatedAt.slice(0,10)}${marker}`;
+        }
+      }
+
+      rows.push(
+        [settingButton(curr === "degen" ? "✅ Degen" : "Degen", "cfg:preset:degen"),
+         settingButton(curr === "moderate" ? "✅ Moderate" : "Moderate", "cfg:preset:moderate"),
+         settingButton(curr === "safe" ? "✅ Safe" : "Safe", "cfg:preset:safe")],
+      );
+      rows.push([settingButton("💾 Save as preset", "cfg:preset:save")]);
+
+      if (customList.length > 0) {
+        for (const p of customList.slice(0, 6)) {
+          const isCurr = p.name === curr;
+          rows.push([settingButton(isCurr ? `✅ ${p.name}` : p.name, `cfg:preset:${p.name}`)]);
+        }
+      }
+
+  } else if (page === "main") {
     rows = [
       [toggleButton("solMode", "SOL mode"), toggleButton("lpAgentRelayEnabled", "LPAgent relay")],
       [toggleButton("chartIndicatorsEnabled", "Chart indicators"), toggleButton("trailingTakeProfit", "Trailing TP")],
@@ -1316,6 +1354,110 @@ async function applySettingsMenuCallback(msg) {
     return;
   }
 
+
+    // cfg:preset:* — all preset callbacks route here (action = parts[1] = "preset")
+        if (action === "preset") {
+          const sub = parts[2] || "";
+
+          // cfg:preset:save — prompt user for a name
+          if (sub === "save") {
+            answerCallbackQuery(msg.callbackQueryId, "Send a name");
+            editMessage(
+              `💾 **Save current config as preset**\n\nSend: \`/savepreset <name>\`\nExample: \`/savepreset aggressive-v2\``,
+              msg.messageId
+            );
+            return;
+          }
+
+          // cfg:preset:confirm:<name> — apply preset
+          if (sub === "confirm") {
+            const name = parts.slice(3).join(":");
+            answerCallbackQuery(msg.callbackQueryId, `Applying ${name}...`);
+            const currentConfig = getUserConfig();
+            const params = getCustomPresetParams(name) || getPresetParams(name, currentConfig);
+            if (!params) {
+              editMessage(`❌ Unknown preset: ${name}`, msg.messageId);
+              return;
+            }
+            const changes = {};
+            for (const [k, v] of Object.entries(params)) changes[k] = v;
+            const result = await executeTool("update_config", { changes, reason: `Applied preset: ${name}` });
+            if (result?.success) {
+              editMessage(`✅ Applied **${name}** preset.`, msg.messageId);
+            } else {
+              editMessage(`❌ Failed: ${result?.error || "Unknown error"}`, msg.messageId);
+            }
+            return;
+          }
+
+          // cfg:preset:cancel — go back to preset page
+          if (sub === "cancel") {
+            answerCallbackQuery(msg.callbackQueryId, "Cancelled");
+            showSettingsMenu({ messageId: msg.messageId, page: "preset" });
+            return;
+          }
+
+          // cfg:preset:<name> — show diff preview (built-in or custom)
+          const name = sub;
+          const currentConfig = getUserConfig();
+          const customParams = getCustomPresetParams(name);
+          const isBuiltin = isBuiltinPreset(name);
+
+          if (!customParams && !isBuiltin) {
+            answerCallbackQuery(msg.callbackQueryId, `Unknown preset: ${name}`);
+            showSettingsMenu({ messageId: msg.messageId, page: "preset" });
+            return;
+          }
+
+          // Build diff
+          let changes = [];
+          let unchangedCount = 0;
+          const params = customParams || getPresetParams(name, currentConfig);
+          const USER_SPECIFIC = new Set([
+            "deployAmountSol", "maxPositions", "minSolToOpen",
+            "publicApiKey", "hiveMindApiKey", "gmgnApiKey",
+          ]);
+          for (const [key, after] of Object.entries(params)) {
+            if (USER_SPECIFIC.has(key)) continue;
+            const before = currentConfig[key];
+            if (String(before) !== String(after)) {
+              changes.push({ path: key, before, after });
+            } else {
+              unchangedCount++;
+            }
+          }
+
+          if (changes.length === 0) {
+            answerCallbackQuery(msg.callbackQueryId, `Already on ${name} preset`);
+            showSettingsMenu({ messageId: msg.messageId, page: "preset" });
+            return;
+          }
+
+          const label = name.charAt(0).toUpperCase() + name.slice(1);
+          const diffText = changes.map(c => {
+            const before = c.before === undefined ? "∅" : String(c.before);
+            const after = c.after === undefined ? "∅" : String(c.after);
+            return `• \`${c.path}\`: ${before} → ${after}`;
+          }).join("\n");
+
+          const preview = [
+            `**Switch to ${label}?**`,
+            "",
+            `**${changes.length}** parameter(s) will change:`,
+            diffText,
+            unchangedCount > 0 ? `\n${unchangedCount} unchanged (same as current)` : "",
+            "",
+            "Tap **Apply** to confirm, or **Cancel** to go back.",
+          ].join("\n");
+
+          answerCallbackQuery(msg.callbackQueryId);
+          editMessageWithButtons(preview, msg.messageId, [
+            [settingButton("✅ Apply", `cfg:preset:confirm:${name}`), settingButton("❌ Cancel", "cfg:preset:cancel")],
+            [settingButton("Back", "cfg:page:preset")],
+          ]);
+          return;
+        }
+
   const key = parts[2];
   let value;
   if (action === "toggle") {
@@ -1373,6 +1515,9 @@ function formatHelpText() {
     "/set <n> <note> — set note/instruction on position",
     "/config — show important runtime config",
     "/settings — button menu for common config",
+    "/preset — show preset menu (degen/moderate/safe)",
+    "/preset <name> — switch to preset (e.g. /preset degen)",
+    "/savepreset <name> — save current config as custom preset",
     "/setcfg <key> <value> — update persisted config",
     "/screen — refresh deterministic candidate list",
     "/candidates — show latest cached candidates",
@@ -1497,6 +1642,86 @@ async function telegramHandler(msg) {
     await showSettingsMenu().catch((e) => sendMessage(`Settings error: ${e.message}`).catch(() => {}));
     return;
   }
+
+  // /preset — show preset menu; /preset <name> — diff + apply buttons
+  const presetMatch = text.match(/^\/preset(?:\s+(\S+))?$/i);
+  if (presetMatch) {
+    try {
+      const name = presetMatch[1];
+      if (!name) {
+        await showSettingsMenu({ page: "preset" });
+      } else {
+        const currentConfig = getUserConfig();
+        const customParams = getCustomPresetParams(name);
+        const isBuiltin = isBuiltinPreset(name);
+
+        if (!customParams && !isBuiltin) {
+          await sendMessage(`❌ Unknown preset: ${name}`);
+        } else {
+          const params = customParams || getPresetParams(name, currentConfig);
+          const USER_SPECIFIC = new Set([
+            "deployAmountSol", "maxPositions", "minSolToOpen",
+            "publicApiKey", "hiveMindApiKey", "gmgnApiKey",
+          ]);
+          let changes = [];
+          let unchangedCount = 0;
+          for (const [key, after] of Object.entries(params)) {
+            if (USER_SPECIFIC.has(key)) continue;
+            const before = currentConfig[key];
+            if (String(before) !== String(after)) {
+              changes.push({ path: key, before, after });
+            } else {
+              unchangedCount++;
+            }
+          }
+          if (changes.length === 0) {
+            await sendMessage(`Already on **${name}** preset.`);
+          } else {
+            const label = name.charAt(0).toUpperCase() + name.slice(1);
+            const diffText = changes.map(c => {
+              const before = c.before === undefined ? "∅" : String(c.before);
+              const after = c.after === undefined ? "∅" : String(c.after);
+              return `• \`${c.path}\`: ${before} → ${after}`;
+            }).join("\n");
+            const preview = [
+              `**Switch to ${label}?**`,
+              "",
+              `**${changes.length}** parameter(s) will change:`,
+              diffText,
+              unchangedCount > 0 ? `\n${unchangedCount} unchanged (same as current)` : "",
+              "",
+              "Tap **Apply** to confirm.",
+            ].join("\n");
+            await sendMessageWithButtons(preview, [
+              [settingButton("✅ Apply", `cfg:preset:confirm:${name}`), settingButton("❌ Cancel", "cfg:preset:cancel")],
+            ]);
+          }
+        }
+      }
+    } catch (e) {
+      await sendMessage(`Preset error: ${e.message}`).catch(() => {});
+    }
+    return;
+  }
+
+  // /savepreset <name> — save current config as named custom preset
+  const savePresetMatch = text.match(/^\/savepreset\s+(\S+)$/i);
+  if (savePresetMatch) {
+    try {
+      const name = savePresetMatch[1];
+      const cfg = getUserConfig();
+      const result = saveCustomPreset(name, cfg);
+      if (result.success) {
+        await sendMessage(`✅ Saved preset **${result.name}** (${result.params || 0} params)`);
+      } else {
+        await sendMessage(`❌ ${result.error}`);
+      }
+    } catch (e) {
+      await sendMessage(`Save preset error: ${e.message}`).catch(() => {});
+    }
+    return;
+  }
+
   if (_managementBusy || _screeningBusy || busy) {
     if (_telegramQueue.length < 5) {
       _telegramQueue.push(msg);

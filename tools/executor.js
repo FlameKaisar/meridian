@@ -12,6 +12,7 @@ import {
 import { getWalletBalances, swapToken } from "./wallet.js";
 import { studyTopLPers } from "./study.js";
 import { addLesson, clearAllLessons, clearPerformance, removeLessonsByKeyword, getPerformanceHistory, pinLesson, unpinLesson, listLessons } from "../lessons.js";
+import { isBuiltinPreset } from "../presets.js";
 import { setPositionInstruction } from "../state.js";
 
 import { getPoolMemory, addPoolNote } from "../pool-memory.js";
@@ -243,6 +244,7 @@ function normalizeConfigValue(key, value) {
     "indicatorEntryPreset",
     "indicatorExitPreset",
     "gmgnApiKey",
+    "repeatDeployCooldownScope",
   ]);
   if (value === null) return null;
   if (booleanKeys.has(key)) return coerceBoolean(value, key);
@@ -392,6 +394,10 @@ const toolMap = {
       repeatDeployCooldownHours: ["management", "repeatDeployCooldownHours"],
       repeatDeployCooldownScope: ["management", "repeatDeployCooldownScope"],
       repeatDeployCooldownMinFeeEarnedPct: ["management", "repeatDeployCooldownMinFeeEarnedPct"],
+      // drawdown recovery — added by preset system
+      drawdownRecoveryEnabled: ["management", "drawdownRecoveryEnabled"],
+      drawdownRecoveryTriggerPct: ["management", "drawdownRecoveryTriggerPct"],
+      drawdownRecoveryTakeProfitPct: ["management", "drawdownRecoveryTakeProfitPct"],
       minVolumeToRebalance: ["management", "minVolumeToRebalance"],
       stopLossPct: ["management", "stopLossPct"],
       takeProfitPct: ["management", "takeProfitPct"],
@@ -512,6 +518,16 @@ const toolMap = {
       } catch (error) {
         return { success: false, error: `Invalid user-config.json: ${error.message}`, reason };
       }
+    }
+
+    // Auto-custom detection: if a built-in preset is active and any param was applied,
+    // the preset becomes "<name> (custom)" so the user knows they diverged.
+    const currentPreset = userConfig.preset || "custom";
+    if (isBuiltinPreset(currentPreset) && Object.keys(applied).length > 0) {
+      const newPreset = `${currentPreset} (custom)`;
+      userConfig.preset = newPreset;
+      fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(userConfig, null, 2) + "\n");
+      log("config", `auto-custom: preset ${currentPreset} → ${newPreset}`);
     }
 
     // Auto-scale fee/volume when timeframe changes (unless user set them explicitly in same call).
@@ -942,4 +958,19 @@ function summarizeResult(result) {
     return str.slice(0, 1000) + "...(truncated)";
   }
   return result;
+}
+
+/**
+ * Read user-config.json and return parsed object.
+ * Reads from disk each call — always fresh.
+ */
+export function getUserConfig() {
+  try {
+    if (!fs.existsSync(USER_CONFIG_PATH)) return {};
+    const raw = fs.readFileSync(USER_CONFIG_PATH, "utf8");
+    return JSON.parse(raw);
+  } catch (e) {
+    log("config", `getUserConfig error: ${e.message}`);
+    return {};
+  }
 }

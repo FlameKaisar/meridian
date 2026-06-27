@@ -34,7 +34,7 @@ export async function studyTopLPers({ pool_address, limit = 4 }) {
       ].filter(Boolean),
       summary: {
         total_positions: owner.totalLp || history?.topPositions?.length || 0,
-        avg_hold_hours: round(owner.avgAgeHours ?? history?.avgHoldHours ?? 0, 2),
+        avg_hold_hours: round(calcAgeHours(owner, history), 2),
         avg_open_pnl_pct: round(owner.pnlPerInflowPct ?? history?.avgPnlPct ?? 0, 2),
         avg_fee_per_tvl_24h_pct: round(owner.feePercent ?? history?.avgFeePercent ?? 0, 2),
         total_pnl_usd: round(owner.totalPnlUsd ?? 0, 2),
@@ -96,7 +96,7 @@ function fetchStudyTopLp(poolAddress) {
 }
 
 function buildPatterns(ranked, historicalOwners, signalData, overview) {
-  const avgHold = avg(ranked.map((o) => o.avgAgeHours).filter(isNum));
+  const avgHold = avg(ranked.map((o) => calcAgeHours(o)).filter(isNum));
   const avgOpenPnlPct = avg(ranked.map((o) => o.pnlPerInflowPct).filter(isNum));
   const avgFeePct = avg(ranked.map((o) => o.feePercent).filter(isNum));
   const avgRoiPct = avg(ranked.map((o) => o.roiPct).filter(isNum));
@@ -115,13 +115,37 @@ function buildPatterns(ranked, historicalOwners, signalData, overview) {
     avg_fee_percent: round(avgFeePct, 2),
     avg_roi_pct: round(avgRoiPct, 2),
     best_open_pnl_pct: ranked[0] ? `${round(ranked[0].pnlPerInflowPct || 0, 2)}%` : null,
-    scalper_count: ranked.filter((o) => (o.avgAgeHours || 0) < 1).length,
-    holder_count: ranked.filter((o) => (o.avgAgeHours || 0) >= 4).length,
+    scalper_count: ranked.filter((o) => calcAgeHours(o) < 1).length,
+    holder_count: ranked.filter((o) => calcAgeHours(o) >= 4).length,
     preferred_strategies: preferredStrategies,
     preferred_range_styles: preferredRanges,
     top_historical_owners: (signalData.topHistoricalOwners || []).slice(0, 3),
     suggested_style: signalData.suggestedStyle || null,
   };
+}
+
+/**
+ * Resolve average age (hold) hours for an owner with smart fallback.
+ *
+ * Priority:
+ * 1. API value if it looks valid (non-zero avgAgeHours, or totalLp > 0)
+ * 2. Historical data from the study-top-lp endpoint
+ * 3. Workaround: calculate from firstActivity → lastActivity timestamps
+ *    (this catches the current API bug where avgAgeHours=0 for everyone)
+ * 4. Absolute zero
+ */
+function calcAgeHours(owner, history = null) {
+  if (owner.avgAgeHours > 0 || (owner.totalLp || 0) > 0) {
+    return owner.avgAgeHours;
+  }
+  if (history?.avgHoldHours > 0) {
+    return history.avgHoldHours;
+  }
+  if (owner.firstActivity && owner.lastActivity) {
+    const hours = (new Date(owner.lastActivity) - new Date(owner.firstActivity)) / 3_600_000;
+    if (hours > 0) return hours;
+  }
+  return 0;
 }
 
 function countValues(values) {
