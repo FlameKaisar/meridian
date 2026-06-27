@@ -28,7 +28,4 @@ export function getScreeningDefaultsForTimeframe(timeframe) {
 }
 
 /** Returns minFeeActiveTvlRatio + minVolume scaled to the given timeframe. */
-export function scaleScreeningToTimeframe(timeframe) {
-  const { minFeeActiveTvlRatio, minVolume } = getScreeningDefaultsForTimeframe(timeframe);
-  return { minFeeActiveTvlRatio, minVolume };
-}
+export const scaleScreeningToTimeframe = getScreeningDefaultsForTimeframe;

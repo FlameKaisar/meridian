@@ -1,21 +1,11 @@
-import fs from "fs";
 import { log } from "./logger.js";
 import { repoPath } from "./repo-root.js";
+import { jsonStore } from "./json-store.js";
 
 const WALLETS_PATH = repoPath("smart-wallets.json");
-
-function loadWallets() {
-  if (!fs.existsSync(WALLETS_PATH)) return { wallets: [] };
-  try {
-    return JSON.parse(fs.readFileSync(WALLETS_PATH, "utf8"));
-  } catch {
-    return { wallets: [] };
-  }
-}
-
-function saveWallets(data) {
-  fs.writeFileSync(WALLETS_PATH, JSON.stringify(data, null, 2));
-}
+const walletsStore = jsonStore(WALLETS_PATH, { wallets: [] });
+const loadWallets = () => walletsStore.load();
+const saveWallets = (data) => walletsStore.save(data);
 
 const SOLANA_PUBKEY_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 

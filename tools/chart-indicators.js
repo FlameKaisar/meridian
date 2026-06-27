@@ -1,8 +1,6 @@
 import { config } from "../config.js";
 import { log } from "../logger.js";
 import { agentMeridianJson, getAgentMeridianHeaders } from "./agent-meridian.js";
-import { safeNumber } from "../utils/number.js";
-
 const DEFAULT_INTERVALS = ["5_MINUTE"];
 const DEFAULT_CANDLES = 298;
 
@@ -14,7 +12,8 @@ function normalizeIntervals(intervals) {
 }
 
 function safeNum(value) {
-  return safeNumber(value, null);
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 
 function buildSignalSummary(payload) {

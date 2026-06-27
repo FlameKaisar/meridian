@@ -4,10 +4,12 @@
  * Run: npm run setup
  */
 
-import "./envcrypt.js";
+import dotenv from "dotenv";
 import readline from "readline";
 import fs from "fs";
 import { repoPath } from "./repo-root.js";
+
+dotenv.config({ override: true, quiet: true });
 import { getScreeningDefaultsForTimeframe, normalizeTimeframe } from "./screening-scales.js";
 
 const CONFIG_PATH = repoPath("user-config.json");

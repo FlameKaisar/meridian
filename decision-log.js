@@ -1,25 +1,12 @@
-import fs from "fs";
 import { log } from "./logger.js";
 import { repoPath } from "./repo-root.js";
+import { jsonStore } from "./json-store.js";
 
 const DECISION_LOG_FILE = repoPath("decision-log.json");
 const MAX_DECISIONS = 100;
-
-function load() {
-  if (!fs.existsSync(DECISION_LOG_FILE)) {
-    return { decisions: [] };
-  }
-  try {
-    return JSON.parse(fs.readFileSync(DECISION_LOG_FILE, "utf8"));
-  } catch (error) {
-    log("decision_log_warn", `Invalid ${DECISION_LOG_FILE}: ${error.message}`);
-    return { decisions: [] };
-  }
-}
-
-function save(data) {
-  fs.writeFileSync(DECISION_LOG_FILE, JSON.stringify(data, null, 2));
-}
+const store = jsonStore(DECISION_LOG_FILE, { decisions: [] });
+const load = () => store.load();
+const save = (data) => store.save(data);
 
 function sanitize(value, maxLen = 280) {
   if (value == null) return null;

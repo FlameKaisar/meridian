@@ -127,7 +127,7 @@ async function postTelegram(method, body, { ignoreNotFound = false } = {}) {
     if (!res.ok) {
       const err = await res.text();
       if (res.status === 401) {
-        log("telegram_error", `${method} 401 Unauthorized — check TELEGRAM_BOT_TOKEN in .env (invalid, revoked, or encrypted without .envrypt key)`);
+        log("telegram_error", `${method} 401 Unauthorized — check TELEGRAM_BOT_TOKEN in .env (invalid or revoked)`);
       } else if (!ignoreNotFound) {
         log("telegram_error", `${method} ${res.status}: ${err.slice(0, 200)}`);
       }
@@ -151,7 +151,7 @@ async function postTelegramRaw(method, body) {
     if (!res.ok) {
       const err = await res.text();
       if (res.status === 401) {
-        log("telegram_error", `${method} 401 Unauthorized — check TELEGRAM_BOT_TOKEN in .env (invalid, revoked, or encrypted without .envrypt key)`);
+        log("telegram_error", `${method} 401 Unauthorized — check TELEGRAM_BOT_TOKEN in .env (invalid or revoked)`);
       } else {
         log("telegram_error", `${method} ${res.status}: ${err.slice(0, 200)}`);
       }

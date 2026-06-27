@@ -4,7 +4,7 @@
  * Direct tool invocation with JSON output. Agent-native.
  */
 
-import { loadEnv } from "./envcrypt.js";
+import dotenv from "dotenv";
 import { parseArgs } from "util";
 import os from "os";
 import fs from "fs";
@@ -17,11 +17,7 @@ if (process.argv.includes("--dry-run")) process.env.DRY_RUN = "true";
 const meridianDir = path.join(os.homedir(), ".meridian");
 const meridianEnv = path.join(meridianDir, ".env");
 if (fs.existsSync(meridianEnv)) {
-  loadEnv({
-    envPath: meridianEnv,
-    keyPath: path.join(meridianDir, ".envrypt"),
-    override: false,
-  });
+  dotenv.config({ path: meridianEnv, override: false, quiet: true });
 }
 
 // ─── Output helpers ───────────────────────────────────────────────

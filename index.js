@@ -1,8 +1,10 @@
-import "./envcrypt.js";
+import dotenv from "dotenv";
 import cron from "node-cron";
 import readline from "readline";
 import path from "path";
 import { fileURLToPath } from "url";
+
+dotenv.config({ override: true, quiet: true });
 import { agentLoop } from "./agent.js";
 import { log } from "./logger.js";
 import { getMyPositions, closePosition, getActiveBin } from "./tools/dlmm.js";

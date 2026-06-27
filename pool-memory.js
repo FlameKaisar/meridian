@@ -5,14 +5,15 @@
  * (via recordPerformance in lessons.js). Agent can query before deploying.
  */
 
-import fs from "fs";
 import { log } from "./logger.js";
 import { config } from "./config.js";
 
 import { repoPath } from "./repo-root.js";
+import { jsonStore } from "./json-store.js";
 
 const POOL_MEMORY_FILE = repoPath("pool-memory.json");
 const MAX_NOTE_LENGTH = 280;
+const store = jsonStore(POOL_MEMORY_FILE, {});
 
 function sanitizeStoredNote(text, maxLen = MAX_NOTE_LENGTH) {
   if (text == null) return null;
@@ -25,18 +26,8 @@ function sanitizeStoredNote(text, maxLen = MAX_NOTE_LENGTH) {
   return cleaned || null;
 }
 
-function load() {
-  if (!fs.existsSync(POOL_MEMORY_FILE)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(POOL_MEMORY_FILE, "utf8"));
-  } catch {
-    return {};
-  }
-}
-
-function save(data) {
-  fs.writeFileSync(POOL_MEMORY_FILE, JSON.stringify(data, null, 2));
-}
+const load = () => store.load();
+const save = (data) => store.save(data);
 
 function isOorCloseReason(reason) {
   const text = String(reason || "").trim().toLowerCase();
