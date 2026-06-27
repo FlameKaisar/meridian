@@ -5,11 +5,10 @@
  */
 
 import dotenv from "dotenv";
+dotenv.config({ override: true, quiet: true });
 import readline from "readline";
 import fs from "fs";
 import { repoPath } from "./repo-root.js";
-
-dotenv.config({ override: true, quiet: true });
 import { getScreeningDefaultsForTimeframe, normalizeTimeframe } from "./screening-scales.js";
 
 const CONFIG_PATH = repoPath("user-config.json");
