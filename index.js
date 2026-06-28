@@ -1352,44 +1352,43 @@ async function applySettingsMenuCallback(msg) {
             return;
           }
 
-          // cfg:preset:delete — show delete menu for custom presets
+          // cfg:preset:delete — delete preset flow
           if (sub === "delete") {
-            const customPresets = listCustomPresets();
-            if (customPresets.length === 0) {
-              answerCallbackQuery(msg.callbackQueryId, "No custom presets");
-              editMessage("No custom presets to delete.", msg.messageId);
-              return;
-            }
-            answerCallbackQuery(msg.callbackQueryId);
-            const delBtns = customPresets.map(p => [settingButton(`🗑 ${p.name}`, `cfg:preset:delete:confirm:${p.name}`)]);
-            editMessageWithButtons(
-              "**🗑 Delete preset**\n\nTap a preset to delete it:",
-              msg.messageId,
-              [...delBtns, [settingButton("Back", "cfg:page:preset")]]
-            );
-            return;
-          }
-
-          // cfg:preset:delete:confirm:<name> — actually delete
-          if (sub === "delete:confirm") {
-            const name = parts.slice(3).join(":");
-            const result = deleteCustomPreset(name);
-            if (result.success) {
-              answerCallbackQuery(msg.callbackQueryId, `Deleted ${name}`);
-              const remaining = listCustomPresets();
-              if (remaining.length === 0) {
-                showSettingsMenu({ messageId: msg.messageId, page: "preset" });
+            if (parts[3] === "confirm") {
+              // cfg:preset:delete:confirm:<name> — actually delete
+              const name = parts.slice(4).join(":");
+              const result = deleteCustomPreset(name);
+              if (result.success) {
+                answerCallbackQuery(msg.callbackQueryId, `Deleted ${name}`);
+                const remaining = listCustomPresets();
+                if (remaining.length === 0) {
+                  showSettingsMenu({ messageId: msg.messageId, page: "preset" });
+                } else {
+                  const delBtns = remaining.map(p => [settingButton(`🗑 ${p.name}`, `cfg:preset:delete:confirm:${p.name}`)]);
+                  editMessageWithButtons(
+                    "**🗑 Delete preset**\n\nTap a preset to delete it:",
+                    msg.messageId,
+                    [...delBtns, [settingButton("Back", "cfg:page:preset")]]
+                  );
+                }
               } else {
-                // Refresh delete list
-                const delBtns = remaining.map(p => [settingButton(`🗑 ${p.name}`, `cfg:preset:delete:confirm:${p.name}`)]);
-                editMessageWithButtons(
-                  "**🗑 Delete preset**\n\nTap a preset to delete it:",
-                  msg.messageId,
-                  [...delBtns, [settingButton("Back", "cfg:page:preset")]]
-                );
+                answerCallbackQuery(msg.callbackQueryId, result.error);
               }
             } else {
-              answerCallbackQuery(msg.callbackQueryId, result.error);
+              // cfg:preset:delete — show delete menu
+              const customPresets = listCustomPresets();
+              if (customPresets.length === 0) {
+                answerCallbackQuery(msg.callbackQueryId, "No custom presets");
+                editMessage("No custom presets to delete.", msg.messageId);
+                return;
+              }
+              answerCallbackQuery(msg.callbackQueryId);
+              const delBtns = customPresets.map(p => [settingButton(`🗑 ${p.name}`, `cfg:preset:delete:confirm:${p.name}`)]);
+              editMessageWithButtons(
+                "**🗑 Delete preset**\n\nTap a preset to delete it:",
+                msg.messageId,
+                [...delBtns, [settingButton("Back", "cfg:page:preset")]]
+              );
             }
             return;
           }

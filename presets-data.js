@@ -32,6 +32,7 @@ export function makePresetParams(config) {
   const s = config.screening ?? {};
   const sc = config.schedule ?? {};
   const st = config.strategy ?? {};
+  const ind = config.indicators ?? {};
   const f = (nested, key) => nested ?? config[key];
   return {
     // strategy
@@ -85,6 +86,12 @@ export function makePresetParams(config) {
     drawdownRecoveryEnabled: f(m.drawdownRecoveryEnabled, "drawdownRecoveryEnabled"),
     drawdownRecoveryTriggerPct: f(m.drawdownRecoveryTriggerPct, "drawdownRecoveryTriggerPct"),
     drawdownRecoveryTakeProfitPct: f(m.drawdownRecoveryTakeProfitPct, "drawdownRecoveryTakeProfitPct"),
+
+    // chart indicators
+    chartIndicatorsEnabled: f(ind.enabled, "chartIndicatorsEnabled"),
+    indicatorEntryPreset: f(ind.entryPreset, "indicatorEntryPreset"),
+    indicatorExitPreset: f(ind.exitPreset, "indicatorExitPreset"),
+    indicatorIntervals: f(ind.intervals, "indicatorIntervals"),
   };
 }
 
@@ -134,6 +141,10 @@ export const PRESETS = {
       drawdownRecoveryEnabled: false,
       drawdownRecoveryTriggerPct: -25,
       drawdownRecoveryTakeProfitPct: 2,
+      chartIndicatorsEnabled: true,
+      indicatorEntryPreset: "supertrend_break",
+      indicatorExitPreset: "rsi",
+      indicatorIntervals: ["5m"],
     },
   },
 
@@ -180,6 +191,10 @@ export const PRESETS = {
       drawdownRecoveryEnabled: true,
       drawdownRecoveryTriggerPct: -15,
       drawdownRecoveryTakeProfitPct: 2,
+      chartIndicatorsEnabled: true,
+      indicatorEntryPreset: "supertrend_break",
+      indicatorExitPreset: "rsi",
+      indicatorIntervals: ["15m"],
     },
   },
 
@@ -226,6 +241,10 @@ export const PRESETS = {
       drawdownRecoveryEnabled: true,
       drawdownRecoveryTriggerPct: -10,
       drawdownRecoveryTakeProfitPct: 2,
+      chartIndicatorsEnabled: true,
+      indicatorEntryPreset: "supertrend_break",
+      indicatorExitPreset: "rsi",
+      indicatorIntervals: ["1h"],
     },
   },
 
