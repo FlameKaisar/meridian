@@ -56,7 +56,14 @@ export function computePresetDiff(name, currentConfig) {
   ]);
   for (const [key, after] of Object.entries(preset.params)) {
     if (USER_SPECIFIC_KEYS.has(key)) continue;
-    const before = getNestedValue(currentConfig, key);
+    // Flat keys → nested path, e.g. chartIndicatorsEnabled → indicators.enabled
+    const FLAT_TO_NESTED = {
+      chartIndicatorsEnabled: "indicators.enabled",
+      indicatorEntryPreset: "indicators.entryPreset",
+      indicatorExitPreset: "indicators.exitPreset",
+      indicatorIntervals: "indicators.intervals",
+    };
+    const before = getNestedValue(currentConfig, FLAT_TO_NESTED[key] || key);
     if (String(before) !== String(after)) {
       changes.push({ key, path: keyToPath(key), before, after });
     } else {
