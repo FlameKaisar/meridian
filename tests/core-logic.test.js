@@ -1,5 +1,6 @@
 // Comprehensive logic tests for Meridian fork changes
 // Tests match actual implementation behavior
+process.env.MERIDIAN_ENV = "test";
 import assert from "assert";
 
 let passed = 0;
@@ -22,6 +23,25 @@ try {
   assert.ok(result.includes("WEN-SOL")); pass("Includes pair name");
   assert.ok(result.includes("2.50")); pass("Includes PnL USD");
   assert.ok(result.includes("45m")); pass("Includes duration (45m)");
+
+  // Verify exact format shape requested by the user
+  const exactResult = formatClosedPosition({
+    pos: { pair: "AIAIAI-SOL", age_minutes: 104, bin_step: 100, fee_tvl_ratio: 1.9775, entry_mcap: 427600, volatility_at_deploy: 3.6691 },
+    result: { pnl_usd: 0.54, pnl_pct: 2.63, close_reason: "Trailing TP: peak 3.63% → current 2.02% (dropped 1.61% >= 1.5%)", close_txs: ["2kHTAFabcdefgh12345YJwk", "x17oSQabcdefgh1234567dt", "M13m8uabcdefgh12345DiHk", "4q4qBjabcdefgh12345q7q5", "2kHTAFabcdefgh12345YJwk", "x17oSQabcdefgh1234567dt", "M13m8uabcdefgh12345DiHk", "4q4qBjabcdefgh12345q7q5"] },
+    tracked: { amount_sol: 0.3 },
+    market: { sol_price_usd: 68.07 },
+    config: { management: { solMode: false } }
+  });
+  const expectedLines = [
+    "🟢 CLOSED | AIAIAI-SOL",
+    "📥 Modal: $20.53",
+    "💰 PnL: $0.54 (+2.63%) ✅",
+    "🤖 Exit: ⚡️ Trailing TP: Trailing TP: peak 3.63% → current 2.02% (dropped 1.61% >= 1.5%)",
+    "⏱️ Duration: 104m",
+    "🔄: $21.07 (+0.54 dari modal)",
+    "📊 Meta: vol=3.6691 | step=100 | fee/TVL=1.9775% | mcap=$427.6K | SOL @ $68.07"
+  ].join("\n");
+  assert.equal(exactResult, expectedLines); pass("Exact closed block matches user layout format (up to Meta)");
 
   // SOL mode — fmtPct uses Math.abs, negative shown via emoji ❌
   const solResult = formatClosedPosition({

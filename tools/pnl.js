@@ -290,6 +290,13 @@ export async function computePositions(walletAddress) {
   const solUsd = prices[SOL_MINT] ?? null;
 
   const positions = flat.map((f) => buildPosition(f, prices, solUsd, meteoraByPosition[f.position], solMode));
+  const filtered = positions.filter((p) => {
+    const tracked = getTrackedPosition(p.position);
+    if (tracked) return true;
+    const val = p.total_value_usd ?? p.total_value_true_usd ?? 0;
+    const fees = p.unclaimed_fees_usd ?? p.unclaimed_fees_true_usd ?? 0;
+    return val > 0 || fees > 0;
+  });
 
-  return { wallet: walletAddress, total_positions: positions.length, positions, source: "rpc" };
+  return { wallet: walletAddress, total_positions: filtered.length, positions: filtered, source: "rpc" };
 }

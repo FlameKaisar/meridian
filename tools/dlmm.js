@@ -801,6 +801,7 @@ export async function deployPosition({
       }
 
       // Phase 2: Add liquidity (may be multiple txs)
+      await pool.refetchStates();
       const addTxs = await pool.addLiquidityByStrategyChunkable({
         positionPubKey: newPosition.publicKey,
         user: wallet.publicKey,
@@ -817,6 +818,7 @@ export async function deployPosition({
       }
     } else {
       // ── Standard Path (≤69 bins) ─────────────────────────────────
+      await pool.refetchStates();
       const tx = await pool.initializePositionAndAddLiquidityByStrategy({
         positionPubKey: newPosition.publicKey,
         user: wallet.publicKey,
@@ -1349,14 +1351,22 @@ export async function getMyPositions({ force = false, silent = false, wallet_add
       }
     }
 
+    const filtered = positions.filter((p) => {
+      const tracked = getTrackedPosition(p.position);
+      if (tracked) return true;
+      const val = p.total_value_usd ?? p.total_value_true_usd ?? 0;
+      const fees = p.unclaimed_fees_usd ?? p.unclaimed_fees_true_usd ?? 0;
+      return val > 0 || fees > 0;
+    });
+
     const result = {
       wallet: walletAddress,
-      total_positions: positions.length,
-      positions,
+      total_positions: filtered.length,
+      positions: filtered,
       source: "meteora",
     };
     if (useLocalWallet) {
-      syncOpenPositions(positions.map(p => p.position));
+      syncOpenPositions(filtered.map(p => p.position));
       _positionsCache = result;
       _positionsCacheAt = Date.now();
     }

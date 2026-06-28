@@ -60,7 +60,14 @@ export function formatClosedPosition({ pos, result = {}, tracked = {}, market = 
                ?? pos.unclaimed_fees_usd ?? 0;
   const feesSol = solUsd > 0 ? feesUsd / solUsd : 0;
   // In-range %
-  const ageMin = pos.age_minutes ?? pos.minutes_held ?? tracked.minutes_held ?? null;
+  let ageMin = pos.age_minutes ?? pos.minutes_held ?? tracked.minutes_held ?? null;
+  if (ageMin == null) {
+    const depAt = pos.deployed_at ?? tracked.deployed_at;
+    if (depAt) {
+      const clsAt = result.closed_at ?? pos.closed_at ?? tracked.closed_at ?? new Date().toISOString();
+      ageMin = Math.round((new Date(clsAt) - new Date(depAt)) / 60000);
+    }
+  }
   let inRangePct;
   if (pos.in_range === true) {
     inRangePct = 100;
@@ -112,12 +119,13 @@ export function formatClosedPosition({ pos, result = {}, tracked = {}, market = 
 
   // ---- PnL line ----
   const pnlIcon = isFlat ? "➖" : isWin ? "✅" : "❌";
-  const pnlLine = `💰 PnL     : ${symP(pnlUsd, pnlSol)} ${pnlIcon}`;
+  const pnlLine = `💰 PnL: ${symP(pnlUsd, pnlSol)} ${pnlIcon}`;
 
   // ---- Modal + Kembali (use whichever mode is active) ----
   const modalStr = solMode ? fmtSol(modalSol) : fmtUsd(modalUsd);
   const kembaliStr = solMode ? fmtSol(kembaliSol) : fmtUsd(kembaliUsd);
-  const deltaStr  = fmtPct(deltaPct, 2, true);
+  const diffVal = solMode ? pnlSol : pnlUsd;
+  const diffStr = (diffVal >= 0 ? "+" : "") + diffVal.toFixed(solMode ? 4 : 2);
 
   // ---- Meta line ----
   const metaParts = [];
@@ -126,7 +134,7 @@ export function formatClosedPosition({ pos, result = {}, tracked = {}, market = 
   if (feeTvl != null)     metaParts.push(`fee/TVL=${(+feeTvl).toFixed(4)}%`);
   if (entryMcap != null)  metaParts.push(`mcap=$${(entryMcap/1000).toFixed(1)}K`);
   if (solUsd > 0)         metaParts.push(`SOL @ $${solUsd.toFixed(2)}`);
-  const metaLine = `📊 Meta    : ${metaParts.join(" | ") || "—"}`;
+  const metaLine = `📊 Meta: ${metaParts.join(" | ") || "—"}`;
 
   // ---- Exit reason (truncate to 200 chars to keep telegram happy) ----
   let exitClean = exitReason;
@@ -135,6 +143,24 @@ export function formatClosedPosition({ pos, result = {}, tracked = {}, market = 
     const minAge = config.management?.minAgeBeforeYieldCheck;
     exitClean = `low yield (fee/TVL < ${minFee}% setelah ${minAge}m)`;
   }
+
+  // Add exit icon/prefix mapping
+  let exitPrefix = "";
+  const lowerReason = exitClean.toLowerCase();
+  if (lowerReason.includes("trailing tp") || lowerReason.includes("trailing take profit")) {
+    exitPrefix = "⚡️ Trailing TP: ";
+  } else if (lowerReason.includes("stop loss")) {
+    exitPrefix = "🛑 ";
+  } else if (lowerReason.includes("take profit")) {
+    exitPrefix = "🎯 ";
+  } else if (lowerReason.includes("yield")) {
+    exitPrefix = "📉 ";
+  } else if (lowerReason.includes("oor") || lowerReason.includes("out of range") || lowerReason.includes("range")) {
+    exitPrefix = "⚠️ ";
+  } else if (lowerReason.includes("manual")) {
+    exitPrefix = "👤 ";
+  }
+  exitClean = exitPrefix + exitClean;
   exitClean = exitClean.length > 200 ? exitClean.slice(0, 197) + "..." : exitClean;
 
   // ---- Tx hashes (compact) ----
@@ -143,20 +169,22 @@ export function formatClosedPosition({ pos, result = {}, tracked = {}, market = 
     ...(result.close_txs || []),
     ...(result.txs || []),
   ].filter(Boolean);
-  const txLine = allTxs.length
-    ? `🔗 Tx     : ${allTxs.join(", ")}`
-    : `🔗 Tx     : —`;
+  const formattedTxs = allTxs.map(sig => {
+    if (typeof sig !== 'string' || sig.length < 12) return sig;
+    return sig.slice(0, 6) + "…" + sig.slice(-4);
+  });
+  const txLine = formattedTxs.length
+    ? `🔗 Tx: ${formattedTxs.join(", ")}`
+    : `🔗 Tx: —`;
 
   return [
     `${icon} CLOSED | ${pos.pair || "?"}`,
-    `📥 Modal   : ${modalStr}`,
+    `📥 Modal: ${modalStr}`,
     pnlLine,
-    `💸 Fees   : ${sym(feesUsd, feesSol)}`,
-    `🤖 Exit   : ${exitClean}`,
-    `⏱️ Duration: ${fmtDuration(durationMin)} | ${inRangeStr}`,
-    `🔄 Kembali: ${kembaliStr} (${deltaStr} dari modal)`,
+    `🤖 Exit: ${exitClean}`,
+    `⏱️ Duration: ${fmtDuration(durationMin)}`,
+    `🔄: ${kembaliStr} (${diffStr} dari modal)`,
     metaLine,
-    txLine,
   ].join("\n");
 }
 

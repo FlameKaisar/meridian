@@ -59,21 +59,32 @@ export async function checkSmartWalletsOnPool({ pool_address }) {
 
   const { getWalletPositions } = await import("./tools/dlmm.js");
 
-  const results = await Promise.all(
-    wallets.map(async (wallet) => {
-      try {
-        const cached = _cache.get(wallet.address);
-        if (cached && Date.now() - cached.fetchedAt < CACHE_TTL) {
-          return { wallet, positions: cached.positions };
+  const results = [];
+  const batchSize = 5;
+  const delayMs = 50;
+
+  for (let i = 0; i < wallets.length; i += batchSize) {
+    const chunk = wallets.slice(i, i + batchSize);
+    const chunkResults = await Promise.all(
+      chunk.map(async (wallet) => {
+        try {
+          const cached = _cache.get(wallet.address);
+          if (cached && Date.now() - cached.fetchedAt < CACHE_TTL) {
+            return { wallet, positions: cached.positions };
+          }
+          const { positions } = await getWalletPositions({ wallet_address: wallet.address });
+          _cache.set(wallet.address, { positions: positions || [], fetchedAt: Date.now() });
+          return { wallet, positions: positions || [] };
+        } catch {
+          return { wallet, positions: [] };
         }
-        const { positions } = await getWalletPositions({ wallet_address: wallet.address });
-        _cache.set(wallet.address, { positions: positions || [], fetchedAt: Date.now() });
-        return { wallet, positions: positions || [] };
-      } catch {
-        return { wallet, positions: [] };
-      }
-    })
-  );
+      })
+    );
+    results.push(...chunkResults);
+    if (i + batchSize < wallets.length) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
 
   const inPool = results
     .filter((r) => r.positions.some((p) => p.pool === pool_address))

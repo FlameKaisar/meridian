@@ -12,7 +12,7 @@ import fs from "fs";
 import { log } from "./logger.js";
 import { repoPath } from "./repo-root.js";
 
-const STATE_FILE = repoPath("state.json");
+const STATE_FILE = process.env.MERIDIAN_ENV === "test" ? repoPath("state.test.json") : repoPath("state.json");
 
 const MAX_RECENT_EVENTS = 20;
 const MAX_INSTRUCTION_LENGTH = 280;
