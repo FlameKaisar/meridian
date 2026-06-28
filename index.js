@@ -1267,7 +1267,7 @@ function renderSettingsMenu(page = "main") {
        settingButton("Moderate", "cfg:preset:moderate"),
        settingButton("Safe", "cfg:preset:safe")],
     );
-    rows.push([settingButton("💾 Save as preset", "cfg:preset:save")]);
+    rows.push([settingButton("💾 Save as preset", "cfg:preset:save"), settingButton("🗑 Delete preset", "cfg:preset:delete")]);
 
     if (customList.length > 0) {
       for (const p of customList.slice(0, 6)) {
@@ -1349,6 +1349,48 @@ async function applySettingsMenuCallback(msg) {
               `💾 **Save current config as preset**\n\nSend: \`/savepreset <name>\`\nExample: \`/savepreset aggressive-v2\``,
               msg.messageId
             );
+            return;
+          }
+
+          // cfg:preset:delete — show delete menu for custom presets
+          if (sub === "delete") {
+            const customPresets = listCustomPresets();
+            if (customPresets.length === 0) {
+              answerCallbackQuery(msg.callbackQueryId, "No custom presets");
+              editMessage("No custom presets to delete.", msg.messageId);
+              return;
+            }
+            answerCallbackQuery(msg.callbackQueryId);
+            const delBtns = customPresets.map(p => [settingButton(`🗑 ${p.name}`, `cfg:preset:delete:confirm:${p.name}`)]);
+            editMessageWithButtons(
+              "**🗑 Delete preset**\n\nTap a preset to delete it:",
+              msg.messageId,
+              [...delBtns, [settingButton("Back", "cfg:page:preset")]]
+            );
+            return;
+          }
+
+          // cfg:preset:delete:confirm:<name> — actually delete
+          if (sub === "delete:confirm") {
+            const name = parts.slice(3).join(":");
+            const result = deleteCustomPreset(name);
+            if (result.success) {
+              answerCallbackQuery(msg.callbackQueryId, `Deleted ${name}`);
+              const remaining = listCustomPresets();
+              if (remaining.length === 0) {
+                showSettingsMenu({ messageId: msg.messageId, page: "preset" });
+              } else {
+                // Refresh delete list
+                const delBtns = remaining.map(p => [settingButton(`🗑 ${p.name}`, `cfg:preset:delete:confirm:${p.name}`)]);
+                editMessageWithButtons(
+                  "**🗑 Delete preset**\n\nTap a preset to delete it:",
+                  msg.messageId,
+                  [...delBtns, [settingButton("Back", "cfg:page:preset")]]
+                );
+              }
+            } else {
+              answerCallbackQuery(msg.callbackQueryId, result.error);
+            }
             return;
           }
 
@@ -1508,6 +1550,7 @@ function formatHelpText() {
     "/preset — show preset menu (degen/moderate/safe)",
     "/preset <name> — switch to preset (e.g. /preset degen)",
     "/savepreset <name> — save current config as custom preset",
+    "/deletepreset <name> — delete a custom preset",
     "/setcfg <key> <value> — update persisted config",
     "/screen — refresh deterministic candidate list",
     "/candidates — show latest cached candidates",
@@ -1708,6 +1751,23 @@ async function telegramHandler(msg) {
       }
     } catch (e) {
       await sendMessage(`Save preset error: ${e.message}`).catch(() => {});
+    }
+    return;
+  }
+
+  // /deletepreset <name> — delete a custom preset
+  const deletePresetMatch = text.match(/^\/deletepreset\s+(\S+)$/i);
+  if (deletePresetMatch) {
+    try {
+      const name = deletePresetMatch[1];
+      const result = deleteCustomPreset(name);
+      if (result.success) {
+        await sendMessage(`🗑 Deleted preset **${result.name}**`);
+      } else {
+        await sendMessage(`❌ ${result.error}`);
+      }
+    } catch (e) {
+      await sendMessage(`Delete preset error: ${e.message}`).catch(() => {});
     }
     return;
   }
