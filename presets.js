@@ -8,6 +8,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { PRESETS, CUSTOM_SNAPSHOT, makePresetParams } from "./presets-data.js";
+import { MIN_SAFE_BINS_BELOW } from "./config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
@@ -87,15 +88,28 @@ function getNestedValue(obj, path) {
 export function getPresetParams(name, liveConfig) {
   const p = PRESETS[name];
   if (!p) return null;
-  if (p.params !== null) return { ...p.params };
-
-  // custom — use snapshot or snapshot live
-  if (CUSTOM_SNAPSHOT) return { ...CUSTOM_SNAPSHOT };
-  if (liveConfig) {
+  let params;
+  if (p.params !== null) {
+    params = { ...p.params };
+  } else if (CUSTOM_SNAPSHOT) {
+    params = { ...CUSTOM_SNAPSHOT };
+  } else if (liveConfig) {
     CUSTOM_SNAPSHOT = makePresetParams(liveConfig);
-    return { ...CUSTOM_SNAPSHOT };
+    params = { ...CUSTOM_SNAPSHOT };
+  } else {
+    return null;
   }
-  return null;
+
+  // Normalize bin values to match what update_config would actually store
+  const STRATEGY_BIN_KEYS = new Set(["binsBelow", "minBinsBelow", "maxBinsBelow", "defaultBinsBelow"]);
+  for (const key of Object.keys(params)) {
+    if (STRATEGY_BIN_KEYS.has(key)) {
+      const n = Number(params[key]);
+      params[key] = Number.isFinite(n) ? Math.max(MIN_SAFE_BINS_BELOW, Math.round(n)) : params[key];
+    }
+  }
+
+  return params;
 }
 
 // ─── apply / save preset ─────────────────────────────
