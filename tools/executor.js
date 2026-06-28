@@ -222,6 +222,8 @@ function normalizeConfigValue(key, value) {
     "lpAgentRelayEnabled",
     "chartIndicatorsEnabled",
     "requireAllIntervals",
+    "repeatDeployCooldownEnabled",
+    "drawdownRecoveryEnabled",
   ]);
   const arrayKeys = new Set(["allowedLaunchpads", "blockedLaunchpads", "indicatorIntervals"]);
   const stringKeys = new Set([

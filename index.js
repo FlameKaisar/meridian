@@ -1,4 +1,5 @@
 import "./env-loader.js";
+import fs from "fs";
 import cron from "node-cron";
 import readline from "readline";
 import path from "path";
@@ -1383,6 +1384,15 @@ async function applySettingsMenuCallback(msg) {
             for (const [k, v] of Object.entries(params)) changes[k] = v;
             const result = await executeTool("update_config", { changes, reason: `Applied preset: ${name}` });
             if (result?.success) {
+              // Bug fix: update preset field in user-config.json so settings menu ✅ works
+              if (isBuiltinPreset(name)) {
+                try {
+                  const ucfgPath = repoPath("user-config.json");
+                  const ucfg = JSON.parse(fs.readFileSync(ucfgPath, "utf8"));
+                  ucfg.preset = name;
+                  fs.writeFileSync(ucfgPath, JSON.stringify(ucfg, null, 2) + "\n");
+                } catch (_) {}
+              }
               editMessage(`✅ Applied **${name}** preset.`, msg.messageId);
             } else {
               editMessage(`❌ Failed: ${result?.error || "Unknown error"}`, msg.messageId);
