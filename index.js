@@ -1188,6 +1188,7 @@ function renderSettingsMenu(page = "main") {
     `Strategy: ${config.strategy.strategy} | bins ${config.strategy.minBinsBelow}-${config.strategy.maxBinsBelow} | deploy ${config.management.deployAmountSol} SOL`,
     `TP/SL: ${config.management.takeProfitPct}% / ${config.management.stopLossPct}% | trailing ${config.management.trailingTakeProfit ? "on" : "off"}`,
     `Indicators: ${config.indicators.enabled ? "on" : "off"} | entry ${config.indicators.entryPreset} | ${fmtSettingValue(config.indicators.intervals)}`,
+    `Preset: "${getUserConfig().preset || "custom"}"`,
   ].join("\n");
 
   const nav = [
@@ -1259,32 +1260,7 @@ function renderSettingsMenu(page = "main") {
     ];
   } else if (page === "preset") {
     rows = [];
-    const cfg = getUserConfig();
-    const curr = cfg?.preset || "custom";
     const customList = listCustomPresets();
-
-    // Compact config summary
-    const solMode = cfg.solMode ? "SOL" : "USD";
-    const relay = cfg.lpAgentRelayEnabled ? "on" : "off";
-    const strategy = cfg.strategy || "-";
-    const binsMin = cfg.minBinsBelow ?? "?";
-    const binsMax = cfg.maxBinsBelow ?? "?";
-    const deploy = cfg.deployAmountSol ?? "?";
-    const tp = cfg.takeProfitPct ?? "?";
-    const sl = cfg.stopLossPct ?? "?";
-    const trailing = cfg.trailingTakeProfit ? "on" : "off";
-    const indOn = cfg.chartIndicatorsEnabled;
-    const indicators = indOn === true ? "on" : (indOn === false ? "off" : "off");
-    const entryPreset = cfg.indicatorEntryPreset || "-";
-    const intervals = Array.isArray(cfg.indicatorIntervals) && cfg.indicatorIntervals.length
-      ? cfg.indicatorIntervals[0] : "-";
-
-    let text = "**Settings: preset**\n\n";
-    text += `Mode: ${solMode} | Relay: ${relay}\n`;
-    text += `Strategy: ${strategy} | bins ${binsMin}-${binsMax} | deploy ${deploy} SOL\n`;
-    text += `TP/SL: ${tp}% / ${sl}% | trailing ${trailing}\n`;
-    text += `Indicators: ${indicators} | entry ${entryPreset} | ${intervals}\n`;
-    text += `Preset: "${curr}"`;
 
     rows.push(
       [settingButton("Degen", "cfg:preset:degen"),
