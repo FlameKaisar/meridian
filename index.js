@@ -1260,38 +1260,44 @@ function renderSettingsMenu(page = "main") {
   } else if (page === "preset") {
     rows = [];
     const cfg = getUserConfig();
-      const curr = cfg?.preset || "custom";
-      const isCustom = !["degen", "moderate", "safe"].includes(curr);
-      const activeLabel = isCustom ? `Custom: ${curr}` : (cfg?.presetName || curr);
-      const customList = listCustomPresets();
+    const curr = cfg?.preset || "custom";
+    const customList = listCustomPresets();
 
-      let text = `**Preset:** ${activeLabel}\n\n`;
-      text += `**Built-in:**\n`;
-      text += `/preset degen — 30m cycles, aggressive\n`;
-      text += `/preset moderate — 4h cycles, balanced\n`;
-      text += `/preset safe — 24h cycles, conservative`;
+    // Compact config summary
+    const solMode = cfg.solMode ? "SOL" : "USD";
+    const relay = cfg.lpAgentRelayEnabled ? "on" : "off";
+    const strategy = cfg.strategy || "-";
+    const binsMin = cfg.minBinsBelow ?? "?";
+    const binsMax = cfg.maxBinsBelow ?? "?";
+    const deploy = cfg.deployAmountSol ?? "?";
+    const tp = cfg.takeProfitPct ?? "?";
+    const sl = cfg.stopLossPct ?? "?";
+    const trailing = cfg.trailingTakeProfit ? "on" : "off";
+    const indOn = cfg.chartIndicatorsEnabled;
+    const indicators = indOn === true ? "on" : (indOn === false ? "off" : "off");
+    const entryPreset = cfg.indicatorEntryPreset || "-";
+    const intervals = Array.isArray(cfg.indicatorIntervals) && cfg.indicatorIntervals.length
+      ? cfg.indicatorIntervals[0] : "-";
 
-      if (customList.length > 0) {
-        text += `\n\n**💾 Saved:**\n`;
-        for (const p of customList) {
-          const marker = p.name === curr ? " ✅" : "";
-          text += `\n• ${p.name} (${p.paramCount} params) — saved ${p.updatedAt.slice(0,10)}${marker}`;
-        }
+    let text = "**Settings: preset**\n\n";
+    text += `Mode: ${solMode} | Relay: ${relay}\n`;
+    text += `Strategy: ${strategy} | bins ${binsMin}-${binsMax} | deploy ${deploy} SOL\n`;
+    text += `TP/SL: ${tp}% / ${sl}% | trailing ${trailing}\n`;
+    text += `Indicators: ${indicators} | entry ${entryPreset} | ${intervals}\n`;
+    text += `Preset: "${curr}"`;
+
+    rows.push(
+      [settingButton("Degen", "cfg:preset:degen"),
+       settingButton("Moderate", "cfg:preset:moderate"),
+       settingButton("Safe", "cfg:preset:safe")],
+    );
+    rows.push([settingButton("💾 Save as preset", "cfg:preset:save")]);
+
+    if (customList.length > 0) {
+      for (const p of customList.slice(0, 6)) {
+        rows.push([settingButton(p.name, `cfg:preset:${p.name}`)]);
       }
-
-      rows.push(
-        [settingButton(curr === "degen" ? "✅ Degen" : "Degen", "cfg:preset:degen"),
-         settingButton(curr === "moderate" ? "✅ Moderate" : "Moderate", "cfg:preset:moderate"),
-         settingButton(curr === "safe" ? "✅ Safe" : "Safe", "cfg:preset:safe")],
-      );
-      rows.push([settingButton("💾 Save as preset", "cfg:preset:save")]);
-
-      if (customList.length > 0) {
-        for (const p of customList.slice(0, 6)) {
-          const isCurr = p.name === curr;
-          rows.push([settingButton(isCurr ? `✅ ${p.name}` : p.name, `cfg:preset:${p.name}`)]);
-        }
-      }
+    }
 
   } else if (page === "main") {
     rows = [
@@ -1384,15 +1390,13 @@ async function applySettingsMenuCallback(msg) {
             for (const [k, v] of Object.entries(params)) changes[k] = v;
             const result = await executeTool("update_config", { changes, reason: `Applied preset: ${name}` });
             if (result?.success) {
-              // Bug fix: update preset field in user-config.json so settings menu ✅ works
-              if (isBuiltinPreset(name)) {
-                try {
-                  const ucfgPath = repoPath("user-config.json");
-                  const ucfg = JSON.parse(fs.readFileSync(ucfgPath, "utf8"));
-                  ucfg.preset = name;
-                  fs.writeFileSync(ucfgPath, JSON.stringify(ucfg, null, 2) + "\n");
-                } catch (_) {}
-              }
+              // Persist preset name so text summary and buttons reflect active preset
+              try {
+                const ucfgPath = repoPath("user-config.json");
+                const ucfg = JSON.parse(fs.readFileSync(ucfgPath, "utf8"));
+                ucfg.preset = name;
+                fs.writeFileSync(ucfgPath, JSON.stringify(ucfg, null, 2) + "\n");
+              } catch (_) {}
               editMessage(`✅ Applied **${name}** preset.`, msg.messageId);
             } else {
               editMessage(`❌ Failed: ${result?.error || "Unknown error"}`, msg.messageId);
