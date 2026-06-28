@@ -1450,7 +1450,15 @@ async function applySettingsMenuCallback(msg) {
           ]);
           for (const [key, after] of Object.entries(params)) {
             if (USER_SPECIFIC.has(key)) continue;
-            const before = currentConfig[key];
+            // Flat keys → nested path for user-config.json (chartIndicators.*)
+            const FLAT_TO_NESTED = {
+              chartIndicatorsEnabled: "chartIndicators.enabled",
+              indicatorEntryPreset: "chartIndicators.entryPreset",
+              indicatorExitPreset: "chartIndicators.exitPreset",
+              indicatorIntervals: "chartIndicators.intervals",
+            };
+            const lookup = FLAT_TO_NESTED[key] || key;
+            const before = lookup.split(".").reduce((o, k) => (o && o[k] !== undefined) ? o[k] : undefined, currentConfig);
             if (String(before) !== String(after)) {
               changes.push({ path: key, before, after });
             } else {
@@ -1699,7 +1707,15 @@ async function telegramHandler(msg) {
           let unchangedCount = 0;
           for (const [key, after] of Object.entries(params)) {
             if (USER_SPECIFIC.has(key)) continue;
-            const before = currentConfig[key];
+            // Flat keys → nested path for user-config.json (chartIndicators.*)
+            const FLAT_TO_NESTED = {
+              chartIndicatorsEnabled: "chartIndicators.enabled",
+              indicatorEntryPreset: "chartIndicators.entryPreset",
+              indicatorExitPreset: "chartIndicators.exitPreset",
+              indicatorIntervals: "chartIndicators.intervals",
+            };
+            const lookup = FLAT_TO_NESTED[key] || key;
+            const before = lookup.split(".").reduce((o, k) => (o && o[k] !== undefined) ? o[k] : undefined, currentConfig);
             if (String(before) !== String(after)) {
               changes.push({ path: key, before, after });
             } else {
