@@ -32,7 +32,7 @@ export function makePresetParams(config) {
   const s = config.screening ?? {};
   const sc = config.schedule ?? {};
   const st = config.strategy ?? {};
-  const ind = config.indicators ?? {};
+  const ind = config.indicators ?? config.chartIndicators ?? {};
   const f = (nested, key) => nested ?? config[key];
   return {
     // strategy
