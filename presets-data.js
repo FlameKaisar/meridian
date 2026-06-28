@@ -244,7 +244,7 @@ export const PRESETS = {
       chartIndicatorsEnabled: true,
       indicatorEntryPreset: "supertrend_break",
       indicatorExitPreset: "rsi",
-      indicatorIntervals: ["1_HOUR"],
+      indicatorIntervals: ["15_MINUTE"],
     },
   },
 
