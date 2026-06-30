@@ -1249,18 +1249,12 @@ function renderSettingsMenu(page = "main") {
       [
         settingButton("Entry: ST", "cfg:set:indicatorEntryPreset:supertrend_break"),
         settingButton("Entry: RSI", "cfg:set:indicatorEntryPreset:rsi_reversal"),
-      ],
-      [
         settingButton("Entry: ST/RSI", "cfg:set:indicatorEntryPreset:supertrend_or_rsi"),
-        settingButton("Entry: BB Rev", "cfg:set:indicatorEntryPreset:bollinger_dlmm_reversion"),
       ],
       [
         settingButton("Exit: ST", "cfg:set:indicatorExitPreset:supertrend_break"),
         settingButton("Exit: RSI", "cfg:set:indicatorExitPreset:rsi_reversal"),
-      ],
-      [
         settingButton("Exit: BB+RSI", "cfg:set:indicatorExitPreset:bb_plus_rsi"),
-        settingButton("Exit: BB Rev", "cfg:set:indicatorExitPreset:bollinger_dlmm_reversion"),
       ],
       stepButtons("rsiLength", "RSI len", 1, { digits: 0 }),
     ];
@@ -2105,29 +2099,6 @@ async function telegramHandler(msg) {
       await sendMessage("▶️ Autonomous cycles resumed.").catch(() => {});
     } else {
       await sendMessage("Autonomous cycles are already running.").catch(() => {});
-    }
-    return;
-  }
-
-  // /analyze — smart wallet deep analysis
-  if (text === "/analyze") {
-    busy = true;
-    let liveMessage = null;
-    try {
-      log("telegram", "Incoming: /analyze");
-      liveMessage = await createLiveMessage("🤖 Live Update\n\nRequest: /analyze", "Analyzing up to 5 newest unanalyzed smart wallets...");
-      const { analyzeWallets } = await import("./analyze-wallets.js");
-      const result = await analyzeWallets({ limit: 5 });
-      const MAX_LEN = 4096;
-      const msg = result.length > MAX_LEN ? result.slice(0, MAX_LEN) + "\n\n_(truncated, full via CLI)_" : result;
-      if (liveMessage) await liveMessage.finalize(msg);
-      else await sendMessage(msg).catch(() => {});
-    } catch (e) {
-      if (liveMessage) await liveMessage.fail(e.message).catch(() => {});
-      else await sendMessage("Error: " + e.message).catch(() => {});
-    } finally {
-      busy = false;
-      drainTelegramQueue().catch(() => {});
     }
     return;
   }

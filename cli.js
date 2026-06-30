@@ -205,12 +205,6 @@ Output: { count, pending, processed, signals: [{id, symbol, pool, author, channe
 ### meridian start [--dry-run]
 Starts the autonomous agent with cron jobs (management + screening).
 
-### meridian analyze-wallets [--limit 5]
-Fetches on-chain data for the N newest unanalyzed smart wallets and runs LLM analysis.
-\`\`\`
-Output: Markdown analysis with wallet table + patterns + highlights
-\`\`\`
-
 ## Flags
 --dry-run     Skip all on-chain transactions
 --silent      Suppress Telegram notifications for this run
@@ -670,15 +664,6 @@ switch (subcommand) {
       strategy: flags.strategy || "spot",
       single_sided_x: argv.includes("--single-sided-x"),
     }));
-    break;
-  }
-
-  // ── analyze-wallets ──────────────────────────────────────────────
-  case "analyze-wallets": {
-    const { analyzeWallets } = await import("./analyze-wallets.js");
-    const limit = flags.limit ? parseInt(flags.limit) : 5;
-    const result = await analyzeWallets({ limit });
-    out({ done: true, analysis: result });
     break;
   }
 
