@@ -126,9 +126,12 @@ async function postTelegram(method, body, { ignoreNotFound = false } = {}) {
     });
     if (!res.ok) {
       const err = await res.text();
+      const isExpectedError = err.includes("message is not modified") ||
+                              err.includes("message to edit not found") ||
+                              err.includes("message can't be edited");
       if (res.status === 401) {
         log("telegram_error", `${method} 401 Unauthorized — check TELEGRAM_BOT_TOKEN in .env (invalid or revoked)`);
-      } else if (!ignoreNotFound) {
+      } else if (!ignoreNotFound || !isExpectedError) {
         log("telegram_error", `${method} ${res.status}: ${err.slice(0, 200)}`);
       }
       return null;
@@ -463,6 +466,7 @@ const BOT_COMMANDS = [
   { command: "candidates", description: "Show latest cached candidates" },
   { command: "deploy",     description: "Deploy candidate by cached index" },
   { command: "briefing",   description: "Morning briefing" },
+  { command: "analyze",    description: "Deep-analyze newest smart wallets" },
   { command: "hive",       description: "HiveMind sync status" },
   { command: "pause",      description: "Stop cron cycles" },
   { command: "resume",     description: "Start cron cycles again" },
@@ -504,7 +508,7 @@ export function stopPolling() {
 // escapeHtml() first. The only raw "<...>" allowed are the intentional
 // formatting tags <b>/<i>/<code>/<u>/<s>/<a> we emit ourselves.
 export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, rangeCoverage, binStep, baseFee }) {
-  if (hasActiveLiveMessage()) return;
+  // Always notify on new deployments
   const priceStr = priceRange
     ? `Price range: ${priceRange.min < 0.0001 ? priceRange.min.toExponential(3) : priceRange.min.toFixed(6)} – ${priceRange.max < 0.0001 ? priceRange.max.toExponential(3) : priceRange.max.toFixed(6)}\n`
     : "";
@@ -526,7 +530,7 @@ export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, 
 }
 
 export async function notifyClose({ pair, pnlUsd, pnlPct }) {
-  if (hasActiveLiveMessage()) return;
+  // Always notify on closed positions
   const sign = pnlUsd >= 0 ? "+" : "";
   await sendHTML(
     `🔒 <b>Closed</b> ${escapeHtml(pair)}\n` +
@@ -535,7 +539,7 @@ export async function notifyClose({ pair, pnlUsd, pnlPct }) {
 }
 
 export async function notifySwap({ inputSymbol, outputSymbol, amountIn, amountOut, tx }) {
-  if (hasActiveLiveMessage()) return;
+  // Always notify on swaps
   const safeIn = amountIn == null ? "?" : escapeHtml(amountIn);
   const safeOut = amountOut == null ? "?" : escapeHtml(amountOut);
   await sendHTML(
@@ -546,7 +550,7 @@ export async function notifySwap({ inputSymbol, outputSymbol, amountIn, amountOu
 }
 
 export async function notifyOutOfRange({ pair, minutesOOR }) {
-  if (hasActiveLiveMessage()) return;
+  // Always notify when out of range
   await sendHTML(
     `⚠️ <b>Out of Range</b> ${escapeHtml(pair)}\n` +
     `Been OOR for ${escapeHtml(minutesOOR)} minutes`
