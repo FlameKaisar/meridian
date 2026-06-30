@@ -41,7 +41,7 @@ function buildSignalSummary(payload) {
   };
 }
 
-function evaluatePreset(side, preset, payload) {
+export function evaluatePreset(side, preset, payload) {
   const summary = buildSignalSummary(payload);
   const oversold = Number(config.indicators.rsiOversold ?? 30);
   const overbought = Number(config.indicators.rsiOverbought ?? 80);
@@ -101,6 +101,21 @@ function evaluatePreset(side, preset, payload) {
             confirmed: close != null && upperBand != null && close >= upperBand,
             reason: `Close ${close ?? "n/a"} >= upper band ${upperBand ?? "n/a"}`,
             signal: summary,
+          };
+    case "bollinger_dlmm_reversion":
+      const pctB = (close != null && lowerBand != null && upperBand != null && upperBand !== lowerBand)
+        ? (close - lowerBand) / (upperBand - lowerBand)
+        : null;
+      return side === "entry"
+        ? {
+            confirmed: pctB != null && pctB >= 0.8,
+            reason: `Bollinger %B is ${pctB != null ? pctB.toFixed(4) : "n/a"} >= 0.8 (Price overextended)`,
+            signal: { ...summary, pctB },
+          }
+        : {
+            confirmed: rsi != null && rsi >= overbought,
+            reason: `RSI ${rsi ?? "n/a"} >= overbought ${overbought}`,
+            signal: { ...summary, pctB },
           };
     case "rsi_plus_supertrend":
       return side === "entry"

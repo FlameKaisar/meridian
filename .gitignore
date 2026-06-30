@@ -27,6 +27,9 @@ decision-log.json
 hivemind-cache.json
 signal-weights.json
 
+# State data directory (cached/scraped data, not source)
+state/data/
+
 # Logs
 logs/
 
