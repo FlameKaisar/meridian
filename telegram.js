@@ -97,6 +97,20 @@ export function isEnabled() {
   return !!TOKEN;
 }
 
+function logTelegramResponse(method, res, err) {
+  // Treat "message is not modified" as benign success — editMessageText returns
+  // HTTP 400 when regenerated content/markup is byte-identical to the live message.
+  if (method === "editMessageText" && res.status === 400 && /message is not modified/i.test(err)) {
+    return { ok: true, restored: true };
+  }
+  if (res.status === 401) {
+    log("telegram_error", `${method} 401 Unauthorized — check TELEGRAM_BOT_TOKEN in .env (invalid, revoked, or encrypted without .envrypt key)`);
+  } else {
+    log("telegram_error", `${method} ${res.status}: ${err.slice(0, 200)}`);
+  }
+  return null;
+}
+
 async function postTelegram(method, body) {
   if (!TOKEN || !chatId) return null;
   try {
@@ -107,12 +121,7 @@ async function postTelegram(method, body) {
     });
     if (!res.ok) {
       const err = await res.text();
-      if (res.status === 401) {
-        log("telegram_error", `${method} 401 Unauthorized — check TELEGRAM_BOT_TOKEN in .env (invalid, revoked, or encrypted without .envrypt key)`);
-      } else {
-        log("telegram_error", `${method} ${res.status}: ${err.slice(0, 200)}`);
-      }
-      return null;
+      return logTelegramResponse(method, res, err);
     }
     return await res.json();
   } catch (e) {
@@ -131,12 +140,7 @@ async function postTelegramRaw(method, body) {
     });
     if (!res.ok) {
       const err = await res.text();
-      if (res.status === 401) {
-        log("telegram_error", `${method} 401 Unauthorized — check TELEGRAM_BOT_TOKEN in .env (invalid, revoked, or encrypted without .envrypt key)`);
-      } else {
-        log("telegram_error", `${method} ${res.status}: ${err.slice(0, 200)}`);
-      }
-      return null;
+      return logTelegramResponse(method, res, err);
     }
     return await res.json();
   } catch (e) {

@@ -1068,8 +1068,24 @@ function settingButton(label, data) {
   return { text: label, callback_data: data };
 }
 
+function setActiveButton(key, rawValue, label) {
+  // Compare normalized target value against live value to mark the active button.
+  const target = normalizeMenuValue(key, rawValue);
+  const current = settingValue(key);
+  let isEqual;
+  if (Array.isArray(target)) {
+    const norm = (arr) => (Array.isArray(arr) ? [...arr].sort() : []).join(",");
+    isEqual = norm(target) === norm(current);
+  } else {
+    isEqual = current === target;
+  }
+  return settingButton(`${label}${isEqual ? " ✓" : ""}`, `cfg:set:${key}:${rawValue}`);
+}
+
 function toggleButton(key, label) {
-  return settingButton(`${label}: ${fmtSettingValue(settingValue(key))}`, `cfg:toggle:${key}`);
+  const value = settingValue(key);  // live, post-update
+  const shown = typeof value === "boolean" ? (value ? "on" : "off") : fmtSettingValue(value);
+  return settingButton(`${label}: ${shown}`, `cfg:toggle:${key}`);
 }
 
 function stepButtons(key, label, step, { digits = 2 } = {}) {
@@ -1143,21 +1159,20 @@ function renderSettingsMenu(page = "main") {
     rows = [
       [toggleButton("chartIndicatorsEnabled", "Chart indicators"), toggleButton("requireAllIntervals", "Require all TF")],
       [
-        settingButton("TF: 5m", "cfg:set:indicatorIntervals:5_MINUTE"),
-        settingButton("TF: 15m", "cfg:set:indicatorIntervals:15_MINUTE"),
-        settingButton("TF: both", "cfg:set:indicatorIntervals:both"),
+        setActiveButton("indicatorIntervals", "5_MINUTE", "TF: 5m"),
+        setActiveButton("indicatorIntervals", "15_MINUTE", "TF: 15m"),
+        setActiveButton("indicatorIntervals", "both", "TF: both"),
       ],
       [
-        settingButton("Entry: ST", "cfg:set:indicatorEntryPreset:supertrend_break"),
-        settingButton("Entry: RSI", "cfg:set:indicatorEntryPreset:rsi_reversal"),
-        settingButton("Entry: ST/RSI", "cfg:set:indicatorEntryPreset:supertrend_or_rsi"),
+        setActiveButton("indicatorEntryPreset", "supertrend_break", "Entry: ST"),
+        setActiveButton("indicatorEntryPreset", "rsi_reversal", "Entry: RSI"),
+        setActiveButton("indicatorEntryPreset", "supertrend_or_rsi", "Entry: ST/RSI"),
       ],
       [
-        settingButton("Exit: ST", "cfg:set:indicatorExitPreset:supertrend_break"),
-        settingButton("Exit: RSI", "cfg:set:indicatorExitPreset:rsi_reversal"),
-        settingButton("Exit: BB+RSI", "cfg:set:indicatorExitPreset:bb_plus_rsi"),
+        setActiveButton("indicatorExitPreset", "supertrend_break", "Exit: ST"),
+        setActiveButton("indicatorExitPreset", "rsi_reversal", "Exit: RSI"),
+        setActiveButton("indicatorExitPreset", "bb_plus_rsi", "Exit: BB+RSI"),
       ],
-      stepButtons("rsiLength", "RSI len", 1, { digits: 0 }),
     ];
   } else {
     rows = [
