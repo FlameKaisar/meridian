@@ -1,6 +1,7 @@
 import fs from "fs";
-import { log } from "./logger.js";
-import { repoPath } from "./repo-root.js";
+ import { log } from "./logger.js";
+import { config } from "./config.js";
+ import { repoPath } from "./repo-root.js";
 
 const USER_CONFIG_PATH = repoPath("user-config.json");
 
@@ -483,12 +484,68 @@ export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, 
   );
 }
 
-export async function notifyClose({ pair, pnlUsd, pnlPct }) {
+
+export async function notifyClose({ pair, summary }) {
   if (hasActiveLiveMessage()) return;
-  const sign = pnlUsd >= 0 ? "+" : "";
+  const s = summary || {};
+  const solMode = config.management.solMode === true;
+  const pnlUsd = numOrNull(s.pnl_usd);
+  const pnlSol = numOrNull(s.pnl_sol);
+  const pnlPct = numOrNull(s.pnl_pct) ?? 0;
+  const profit = ((solMode ? pnlSol ?? pnlUsd : pnlUsd ?? pnlSol) ?? 0) >= 0;
+  const sign = profit ? "+" : "-";
+  const mark = profit ? "✅" : "❌";
+
+  // single-currency amount per solMode; falls back to the other currency, then "?"
+  const amt = (sol, usd) => {
+    const solStr = sol != null ? `◎${sol.toFixed(4)}` : null;
+    const usdStr = usd != null ? `$${usd.toFixed(2)}` : null;
+    return (solMode ? solStr ?? usdStr : usdStr ?? solStr) ?? "?";
+  };
+
+  const initialSol = numOrNull(s.initial_sol);
+  const initialUsd = numOrNull(s.initial_usd);
+  const feesSol    = numOrNull(s.fees_sol);
+  const feesUsd    = numOrNull(s.fees_usd);
+
+  const pnlMain = solMode
+    ? (pnlSol != null ? `${sign}◎${Math.abs(pnlSol).toFixed(4)}` : pnlUsd != null ? `${sign}$${Math.abs(pnlUsd).toFixed(2)}` : null)
+    : (pnlUsd != null ? `${sign}$${Math.abs(pnlUsd).toFixed(2)}` : pnlSol != null ? `${sign}◎${Math.abs(pnlSol).toFixed(4)}` : null);
+  const pnlLine = pnlMain != null ? `${pnlMain} (${sign}${Math.abs(pnlPct).toFixed(2)}%) ${mark}` : "?";
+
+  const held = numOrNull(s.minutes_held);
+  const inRange = numOrNull(s.minutes_in_range);
+  const durationLine =
+    held != null
+      ? `${held}m | ${held > 0 && inRange != null ? Math.min(100, Math.max(0, Math.round((inRange / held) * 100))) : 100}% In-Range 🎯`
+      : "?";
+
+  const returnSol = initialSol != null && pnlSol != null ? initialSol + pnlSol : null;
+  const returnUsd = initialUsd != null && pnlUsd != null ? initialUsd + pnlUsd : null;
+  const returnMain  = amt(returnSol, returnUsd);
+  const returnDelta = amt(pnlSol != null ? Math.abs(pnlSol) : null, pnlUsd != null ? Math.abs(pnlUsd) : null);
+  const returnLine =
+    returnMain !== "?" && returnDelta !== "?"
+      ? `${returnMain} (${sign}${returnDelta} dari modal)`
+      : "?";
+
+  const trim4 = (v) => String(Number(v.toFixed(4)));
+  const metaParts = [
+    s.volatility   != null ? `vol=${trim4(s.volatility)}` : null,
+    s.bin_step     != null ? `step=${s.bin_step}` : null,
+    s.fee_tvl_ratio != null ? `fee/TVL=${trim4(s.fee_tvl_ratio)}%` : null,
+    s.sol_price    != null ? `SOL @ $${s.sol_price.toFixed(2)}` : null,
+  ].filter(Boolean);
+
   await sendHTML(
-    `🔒 <b>Closed</b> ${pair}\n` +
-    `PnL: ${sign}$${(pnlUsd ?? 0).toFixed(2)} (${sign}${(pnlPct ?? 0).toFixed(2)}%)`
+    `${profit ? "🟢" : "🔴"} <b>CLOSED</b> | ${esc(pair)}\n` +
+    `📥 Modal    : ${amt(initialSol, initialUsd)}\n` +
+    `💰 PnL      : ${pnlLine}\n` +
+    `💸 Fees     : ${amt(feesSol, feesUsd)}\n` +
+    `🤖 Exit     : ${esc(s.exit_reason || "agent decision")}\n` +
+    `⏱️ Duration : ${durationLine}\n` +
+    `🔄 Kembali  : ${returnLine}\n` +
+    `📊 Meta     : ${metaParts.length ? metaParts.join(" | ") : "?"}`
   );
 }
 
@@ -516,4 +573,13 @@ function sleep(ms) {
 function fmtPct(value) {
   const n = Number(value);
   return Number.isFinite(n) ? `${n.toFixed(2)}%` : "?";
+}
+
+function esc(text) {
+  return String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function numOrNull(value) {
+  if (value == null) return null;           // Number(null) === 0 — must not coerce
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
