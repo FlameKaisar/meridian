@@ -993,6 +993,100 @@ function formatWalletStatus(wallet, positions) {
     `HiveMind: ${hive}`,
   ].join("\n");
 }
+function fmtMcap(m) {
+  if (m == null || !Number.isFinite(m)) return "?";
+  if (m >= 1e9) return `$${(m / 1e9).toFixed(2)}B`;
+  if (m >= 1e6) return `$${(m / 1e6).toFixed(1)}M`;
+  if (m >= 1e3) return `$${Math.round(m / 1e3)}k`;
+  return `$${Math.round(m)}`;
+}
+
+function fmtDuration(min) {
+  if (min == null || !Number.isFinite(Number(min))) return "?";
+  const t = Math.max(0, Math.floor(Number(min)));
+  const d = Math.floor(t / 1440);
+  const h = Math.floor((t % 1440) / 60);
+  const m = t % 60;
+  if (d > 0) return `${d}d${h}h${m}m`;
+  if (h > 0) return `${h}h${m}m`;
+  return `${m}m`;
+}
+
+const GRAPH_BARS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+
+function liquidityGraph(lower, upper, active, strategy) {
+  if (lower == null || upper == null || active == null) return "?";
+  const N = 20;
+  const range = upper - lower;
+  const frac = range > 0 ? (active - lower) / range : (active >= upper ? 1 : 0);
+  const pct = Math.min(100, Math.max(0, Math.round(frac * 100)));
+  const activeIdx = Math.min(N - 1, Math.max(0, Math.round(frac * (N - 1))));
+  const level = (i) => {
+    const t = 1 - i / (N - 1); // 1 at left edge → 0 at right edge (deploy-active)
+    if (strategy === "curve") return Math.round(7 * (1 - t * t)); // one-sided half-bell, peaks at right edge
+    if (strategy === "bid_ask") return Math.round(7 * t * t);     // one-sided inverse-gaussian arm, heaviest at left edge
+    return 7;                                                     // spot / unknown → flat full
+  };
+  let out = "";
+  for (let i = 0; i < N; i++) out += i === activeIdx ? "↓" : GRAPH_BARS[level(i)];
+  return `${out} ${pct}%`;
+}
+
+const KEYCAPS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"];
+
+export function formatPositionsMessage(positions, mcapByPool = new Map(), getTracked = () => null) {
+  const cur = config.management.solMode ? "◎" : "$";
+  const total = Math.round(positions.reduce((s, p) => s + (Number(p.total_value_usd) || 0), 0) * 1e4) / 1e4;
+  const blocks = positions.map((p, i) => {
+    const tracked = getTracked(p.position) || null;
+    const num = KEYCAPS[i] || `#${i + 1}`;
+    const sign = (p.pnl_usd ?? 0) >= 0 ? "+" : "-";
+    const pnlStr = p.pnl_usd != null ? `${sign}${cur}${Math.abs(p.pnl_usd)}` : "?";
+    const pctStr = p.pnl_pct != null ? `${sign}${Math.abs(p.pnl_pct)}%` : "?";
+    const status = p.in_range
+      ? `🟢 IN RANGE${p.age_minutes != null ? ` ${fmtDuration(p.age_minutes)}` : ""}`
+      : `🔴 OUT OF RANGE ${fmtDuration(p.minutes_out_of_range ?? 0)}`;
+    const binLine = p.lower_bin != null && p.upper_bin != null && p.active_bin != null
+      ? `${p.lower_bin} ← ${p.active_bin} → ${p.upper_bin}`
+      : "?";
+    return [
+      `${num} 🪙 ${p.pair}`,
+      `├ 💰 Value: ${p.total_value_usd != null ? `${cur}${p.total_value_usd}` : "?"}`,
+      `├ 📈 Mcap: ${fmtMcap(tracked?.entry_mcap)} → ${fmtMcap(mcapByPool.get(p.pool))}`,
+      `├ 💹 PnL: ${pnlStr} (${pctStr})`,
+      `├ 💸 Fees: ${p.unclaimed_fees_usd != null ? `${cur}${p.unclaimed_fees_usd}` : "?"}`,
+      `├ 📡 Status: ${status}`,
+      `├ ⏱️ Age: ${fmtDuration(p.age_minutes)}`,
+      `├ 📍 Position: ${liquidityGraph(p.lower_bin, p.upper_bin, p.active_bin, tracked?.strategy)}`,
+      `├ 🎯 Bin: ${binLine}`,
+      `└ ⚡ Fee/TVL: ${p.fee_per_tvl_24h != null ? `${p.fee_per_tvl_24h}%` : "?"}`,
+    ].join("\n");
+  });
+  return [
+    "📊 OPEN POSITIONS",
+    "━".repeat(33),
+    `(${positions.length}/${config.risk.maxPositions}) | Total: ${cur}${total}`,
+    "",
+    blocks.join("\n\n"),
+    "",
+    "/close <n> to close | /set <n> <note> to set instruction",
+  ].join("\n");
+}
+
+async function fetchCurrentMcaps(positions) {
+  const pools = [...new Set(positions.map((p) => p.pool).filter(Boolean))];
+  const entries = await Promise.all(pools.map(async (pool) => {
+    try {
+      const res = await fetch(`https://pool-discovery-api.datapi.meteora.ag/pools?page_size=1&filter_by=${encodeURIComponent(`pool_address=${pool}`)}&timeframe=${encodeURIComponent(config.screening?.timeframe || "5m")}`);
+      const data = await res.json().catch(() => null);
+      const mcap = parseFloat(data?.data?.[0]?.token_x?.market_cap);
+      return [pool, Number.isFinite(mcap) ? mcap : null];
+    } catch {
+      return [pool, null];
+    }
+  }));
+  return new Map(entries);
+}
 
 function formatConfigSnapshot() {
   return [
@@ -1460,21 +1554,15 @@ async function telegramHandler(msg) {
     return;
   }
 
-  if (text === "/positions") {
-    try {
-      const { positions, total_positions } = await getMyPositions({ force: true });
-      if (total_positions === 0) { await sendMessage("No open positions."); return; }
-      const cur = config.management.solMode ? "◎" : "$";
-      const lines = positions.map((p, i) => {
-        const pnl = p.pnl_usd >= 0 ? `+${cur}${p.pnl_usd}` : `-${cur}${Math.abs(p.pnl_usd)}`;
-        const age = p.age_minutes != null ? `${p.age_minutes}m` : "?";
-        const oor = !p.in_range ? " ⚠️OOR" : "";
-        return `${i + 1}. ${p.pair} | ${cur}${p.total_value_usd} | PnL: ${pnl} | fees: ${cur}${p.unclaimed_fees_usd} | ${age}${oor}`;
-      });
-      await sendMessage(`📊 Open Positions (${total_positions}):\n\n${lines.join("\n")}\n\n/close <n> to close | /set <n> <note> to set instruction`);
-    } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => {}); }
-    return;
-  }
+if (text === "/positions") {
+  try {
+    const { positions, total_positions } = await getMyPositions({ force: true });
+    if (total_positions === 0) { await sendMessage("No open positions."); return; }
+    const mcapByPool = await fetchCurrentMcaps(positions);
+    await sendMessage(formatPositionsMessage(positions, mcapByPool, getTrackedPosition));
+  } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => {}); }
+  return;
+}
 
   const poolMatch = text.match(/^\/pool\s+(\d+)$/i);
   if (poolMatch) {
