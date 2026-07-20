@@ -1993,7 +1993,7 @@ Commands:
     if (input === "/briefing") {
       await runBusy(async () => {
         const briefing = await generateBriefing();
-        console.log(`\n${briefing.replace(/<[^>]*>/g, "")}\n`);
+        console.log(`\n${briefing.replace(/<[^>]*>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&")}\n`);
       });
       return;
     }

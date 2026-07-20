@@ -111,7 +111,7 @@ function logTelegramResponse(method, res, err) {
   return null;
 }
 
-async function postTelegram(method, body) {
+async function postTelegram(method, body, opts = {}) {
   if (!TOKEN || !chatId) return null;
   try {
     const res = await fetch(`${BASE}/${method}`, {
@@ -121,7 +121,11 @@ async function postTelegram(method, body) {
     });
     if (!res.ok) {
       const err = await res.text();
-      return logTelegramResponse(method, res, err);
+      const logged = logTelegramResponse(method, res, err);
+      if (logged === null && opts.exposeError) {
+        return { ok: false, status: res.status, errorText: err.slice(0, 300) };
+ }
+      return logged;
     }
     return await res.json();
   } catch (e) {
@@ -164,7 +168,13 @@ export async function sendMessageWithButtons(text, inlineKeyboard) {
 
 export async function sendHTML(html) {
   if (!TOKEN || !chatId) return;
-  return postTelegram("sendMessage", { text: html.slice(0, 4096), parse_mode: "HTML" });
+  const res = await postTelegram("sendMessage", { text: html.slice(0, 4096), parse_mode: "HTML" }, { exposeError: true });
+  if (res && res.ok === false && res.status === 400 && /can't parse entities/i.test(res.errorText || "")) {
+    log("telegram_warn", "sendHTML: Telegram rejected HTML entities — retrying as plain text");
+    const plain = html.replace(/<[^>]*>/g, "");
+    return postTelegram("sendMessage", { text: plain.slice(0, 4096) });
+  }
+  return res;
 }
 
 export async function editMessage(text, messageId) {
@@ -579,7 +589,7 @@ function fmtPct(value) {
   return Number.isFinite(n) ? `${n.toFixed(2)}%` : "?";
 }
 
-function esc(text) {
+export function esc(text) {
   return String(text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 function numOrNull(value) {
