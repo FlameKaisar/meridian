@@ -1022,9 +1022,10 @@ function liquidityGraph(lower, upper, active, strategy) {
   const pct = Math.min(100, Math.max(0, Math.round(frac * 100)));
   const activeIdx = Math.min(N - 1, Math.max(0, Math.round(frac * (N - 1))));
   const level = (i) => {
-    if (strategy === "curve") return Math.round((1 - Math.abs((2 * (i + 0.5)) / N - 1)) * 7);
-    if (strategy === "bid_ask") return Math.round(Math.abs((2 * (i + 0.5)) / N - 1) * 7);
-    return 7;
+    const t = 1 - i / (N - 1); // 1 at left edge → 0 at right edge (deploy-active)
+    if (strategy === "curve") return Math.round(7 * (1 - t * t)); // one-sided half-bell, peaks at right edge
+    if (strategy === "bid_ask") return Math.round(7 * t * t);     // one-sided inverse-gaussian arm, heaviest at left edge
+    return 7;                                                     // spot / unknown → flat full
   };
   let out = "";
   for (let i = 0; i < N; i++) out += i === activeIdx ? "↓" : GRAPH_BARS[level(i)];
